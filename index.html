@@ -2,103 +2,158 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>LeafCon AR</title>
-<meta name="description" content="LeafCon: the air-con made of leaves. Place a tree or plant around you in AR.">
+<meta name="description" content="LeafCon: the air-con made of leaves. Plant real-size plants in your office with AR.">
+<meta name="theme-color" content="#2F7D4F">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700&family=Instrument+Sans:wght@400;600&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
-<script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@4.0.0/dist/model-viewer.min.js"></script>
+
+<!--
+  AR engine: 8th Wall Distributed Engine Binary (world tracking / SLAM).
+  This product includes the XR Engine software developed by Niantic Spatial, Inc.
+  Copyright © 2026 Niantic Spatial, Inc. All rights reserved.
+  License: https://github.com/8thwall/engine/blob/main/LICENSE
+  Base: 8th Wall "placeground" three.js example (github.com/8thwall/web).
+  3D plants: Poly Haven (CC0).
+-->
+<script src="https://cdn.jsdelivr.net/npm/@8thwall/engine-binary@1.0.0/dist/xr.js" async crossorigin="anonymous" data-preload-chunks="slam"></script>
+<script src="https://cdn.jsdelivr.net/npm/@8thwall/xrextras@1.0.0/dist/xrextras.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@8thwall/landing-page@1.0.0/dist/landing-page.js" crossorigin="anonymous"></script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.183.2/build/three.module.min.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.183.2/examples/jsm/"
+} }
+</script>
 <style>
   :root {
-    --green: #2F7D4F;
-    --green-dark: #1F5A38;
-    --ink: #17221B;
-    --muted: #5B6B60;
-    --bg: #F6F8F4;
-    --card: #FFFFFF;
-    --line: #DCE4DC;
+    --green: #2F7D4F; --green-dark: #1F5A38; --ink: #17221B; --muted: #5B6B60;
+    --bg: #F6F8F4; --card: #FFFFFF; --line: #DCE4DC; --glass: rgba(255,255,255,.88);
   }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; background: var(--bg); color: var(--ink); }
-  body {
-    font-family: "Instrument Sans", system-ui, -apple-system, sans-serif;
-    min-height: 100dvh; display: flex; flex-direction: column;
-    padding: env(safe-area-inset-top) 16px calc(16px + env(safe-area-inset-bottom));
-  }
-  header { padding: 20px 0 8px; }
-  .brand { font-family: "Bricolage Grotesque", system-ui, sans-serif; font-weight: 700; font-size: 28px; color: var(--green); letter-spacing: -0.02em; }
-  .claim { margin: 2px 0 0; font-size: 16px; color: var(--muted); }
-  .label { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 16px 0 8px; }
-  .picker { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-  .picker button {
-    font: inherit; font-size: 14px; font-weight: 600; color: var(--ink);
-    background: var(--card); border: 2px solid var(--line); border-radius: 12px;
-    padding: 10px 4px; cursor: pointer; min-height: 48px;
-  }
-  .picker button[aria-pressed="true"] { border-color: var(--green); color: var(--green); }
-  .size { display: block; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11px; font-weight: 500; color: var(--muted); margin-top: 2px; }
-  model-viewer {
-    flex: 1; width: 100%; min-height: 320px; margin-top: 12px;
-    background: linear-gradient(#EAF2EA, #F6F8F4); border-radius: 16px;
-    --poster-color: transparent;
-  }
-  .ar-btn {
-    position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
-    font: inherit; font-size: 17px; font-weight: 600; color: #fff;
-    background: var(--green); border: 0; border-radius: 999px;
-    padding: 14px 24px; white-space: nowrap; box-shadow: 0 4px 16px rgba(23,34,27,.25);
-  }
-  .ar-btn:active { background: var(--green-dark); }
-  .no-ar { margin: 12px 0 0; font-size: 14px; color: var(--muted); text-align: center; }
-  .help { margin: 12px 0 0; font-size: 14px; color: var(--muted); line-height: 1.4; }
-  footer { margin-top: 12px; font-size: 11px; color: var(--muted); text-align: center; }
-  footer a { color: inherit; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color: var(--ink);
+    font-family: "Instrument Sans", system-ui, -apple-system, sans-serif; }
+  #camerafeed { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .hidden { display: none !important; }
+
+  /* Start screen */
+  #start { position: fixed; inset: 0; z-index: 30; background: var(--bg); display: flex; flex-direction: column;
+    padding: calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom)); }
+  .brand { font-family: "Bricolage Grotesque", system-ui, sans-serif; font-weight: 700; font-size: 34px;
+    color: var(--green); letter-spacing: -0.02em; margin: 0; }
+  .claim { margin: 2px 0 0; font-size: 17px; color: var(--muted); }
+  #start h1 { font-family: "Bricolage Grotesque", system-ui, sans-serif; font-size: 30px; line-height: 1.1;
+    letter-spacing: -0.02em; margin: auto 0 16px; }
+  .steps { list-style: none; padding: 0; margin: 0 0 24px; display: grid; gap: 10px; }
+  .steps li { display: flex; gap: 12px; align-items: center; font-size: 16px; }
+  .steps b { font-family: "IBM Plex Mono", ui-monospace, monospace; font-weight: 500; color: var(--green);
+    width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--green); display: grid; place-items: center;
+    font-size: 13px; flex: none; }
+  .cta { background: var(--green); color: #fff; border: 0; border-radius: 999px; padding: 16px 24px; font-size: 18px;
+    font-weight: 600; width: 100%; box-shadow: 0 6px 20px rgba(31,90,56,.3); }
+  .cta:active { background: var(--green-dark); }
+  .fine { font-size: 12px; color: var(--muted); text-align: center; margin: 12px 0 0; }
+
+  /* AR overlay */
+  #ui { position: fixed; inset: 0; z-index: 10; pointer-events: none; }
+  #ui > * { pointer-events: auto; }
+  .topbar { position: absolute; top: calc(12px + env(safe-area-inset-top)); left: 12px; right: 12px;
+    display: flex; justify-content: space-between; align-items: center; gap: 8px; pointer-events: none; }
+  .pill { pointer-events: auto; background: var(--glass); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border-radius: 999px; padding: 8px 14px; font-size: 14px; box-shadow: 0 2px 10px rgba(0,0,0,.15); }
+  .pill .brand { font-size: 18px; }
+  #count { font-weight: 600; }
+  #hint { position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%); background: rgba(23,34,27,.72);
+    color: #fff; border-radius: 14px; padding: 12px 16px; font-size: 15px; text-align: center; max-width: 80%;
+    pointer-events: none; transition: opacity .3s; }
+  .tray-wrap { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 0 calc(12px + env(safe-area-inset-bottom)); }
+  #selbar { display: flex; justify-content: center; gap: 8px; margin: 0 12px 10px; }
+  #selbar button { background: var(--glass); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border: 0; border-radius: 999px; padding: 10px 16px; font-weight: 600; font-size: 15px; box-shadow: 0 2px 10px rgba(0,0,0,.15); }
+  #selbar .danger { color: #B42318; }
+  #tray { display: flex; gap: 8px; overflow-x: auto; padding: 4px 12px; scroll-snap-type: x mandatory; scrollbar-width: none; }
+  #tray::-webkit-scrollbar { display: none; }
+  .item { flex: none; width: 92px; scroll-snap-align: start; background: var(--glass); backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px); border: 2px solid transparent; border-radius: 16px; padding: 6px 4px 8px;
+    text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,.15); }
+  .item img { width: 64px; height: 64px; object-fit: contain; display: block; margin: 0 auto 2px; }
+  .item .n { font-size: 13px; font-weight: 600; display: block; }
+  .item .s { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11px; color: var(--muted); }
+  .item[aria-pressed="true"] { border-color: var(--green); background: #fff; }
+  .actions { display: flex; gap: 8px; }
+  .icon-btn { pointer-events: auto; background: var(--glass); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border: 0; border-radius: 999px; width: 40px; height: 40px; display: grid; place-items: center; font-size: 18px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.15); }
+  .icon-btn svg { width: 20px; height: 20px; }
+  #flash { position: fixed; inset: 0; background: #fff; z-index: 40; opacity: 0; pointer-events: none; transition: opacity .25s; }
+
+  /* Photo sheet */
+  #sheet { position: fixed; inset: 0; z-index: 35; background: rgba(0,0,0,.6); display: flex; align-items: flex-end; }
+  #sheet .card { background: var(--bg); width: 100%; border-radius: 20px 20px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); }
+  #sheet img { width: 100%; max-height: 55vh; object-fit: contain; border-radius: 12px; background: #000; display: block; }
+  #sheet .row { display: flex; gap: 8px; margin-top: 12px; }
+  #sheet .row button { flex: 1; }
+  .ghost { background: transparent; border: 2px solid var(--line); border-radius: 999px; padding: 14px; font-weight: 600; font-size: 16px; }
 </style>
 </head>
 <body>
-<header>
-  <div class="brand">LeafCon</div>
-  <p class="claim">The air-con made of leaves.</p>
-</header>
+<canvas id="camerafeed"></canvas>
 
-<div class="label">1 · Pick a plant</div>
-<div class="picker" role="group" aria-label="Plant">
-  <button type="button" data-src="models/tree_oak.glb" data-name="City tree" aria-pressed="true">Tree<span class="size">~6 m</span></button>
-  <button type="button" data-src="models/plant_bushLarge.glb" data-name="Bush" aria-pressed="false">Bush<span class="size">~1.2 m</span></button>
-  <button type="button" data-src="models/plant_flatTall.glb" data-name="Plant" aria-pressed="false">Plant<span class="size">~0.8 m</span></button>
-  <button type="button" data-src="models/flower_yellowA.glb" data-name="Flowers" aria-pressed="false">Flowers<span class="size">~0.4 m</span></button>
+<section id="start">
+  <div>
+    <p class="brand">LeafCon</p>
+    <p class="claim">The air-con made of leaves.</p>
+  </div>
+  <h1>See your office green. Right now.</h1>
+  <ol class="steps">
+    <li><b>1</b>Point your phone at the floor.</li>
+    <li><b>2</b>Pick a plant. Tap the floor to plant it.</li>
+    <li><b>3</b>Drag to move. Walk around it. Take a photo.</li>
+  </ol>
+  <button class="cta" id="go">Start AR</button>
+  <p class="fine">Uses your camera. Nothing is uploaded.</p>
+</section>
+
+<div id="ui" class="hidden">
+  <div class="topbar">
+    <span class="pill"><span class="brand">LeafCon</span></span>
+    <div class="actions">
+      <button class="icon-btn" id="undo" aria-label="Undo last plant" title="Undo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg>
+      </button>
+      <button class="icon-btn" id="photo" aria-label="Take a photo" title="Photo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+      </button>
+    </div>
+  </div>
+  <div id="hint">Move your phone slowly to find the floor.</div>
+  <div class="tray-wrap">
+    <div id="selbar" class="hidden">
+      <button id="rotate">Rotate</button>
+      <button id="remove" class="danger">Remove</button>
+      <button id="done">Done</button>
+    </div>
+    <div class="topbar" style="position:static;margin:0 12px 8px;">
+      <span class="pill"><span id="count">0 plants</span></span>
+    </div>
+    <div id="tray" role="group" aria-label="Plants"></div>
+  </div>
 </div>
 
-<div class="label">2 · Place it around you</div>
-<model-viewer id="mv"
-  src="models/tree_oak.glb"
-  alt="A 3D tree from LeafCon"
-  ar ar-modes="webxr scene-viewer quick-look"
-  ar-placement="floor" ar-scale="fixed"
-  camera-controls touch-action="pan-y" auto-rotate
-  shadow-intensity="1" exposure="1.1"
-  camera-orbit="30deg 75deg auto">
-  <button slot="ar-button" class="ar-btn">Place in my space</button>
-</model-viewer>
-<p class="no-ar" id="noAr" hidden>AR needs a phone. Scan the QR code with your phone camera.</p>
-<p class="help">Point the camera at the floor and move the phone slowly. The plant shows at real size. Walk around it.</p>
+<div id="sheet" class="hidden">
+  <div class="card">
+    <img id="shot" alt="Photo of your green office">
+    <div class="row">
+      <button class="ghost" id="closeSheet">Back</button>
+      <button class="cta" id="share">Save / share</button>
+    </div>
+  </div>
+</div>
+<div id="flash"></div>
 
-<footer>3D models: <a href="https://kenney.nl">Kenney</a> (CC0). Uni project, HsH Hannover.</footer>
-
-<script>
-  const mv = document.getElementById('mv');
-  document.querySelectorAll('.picker button').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.picker button').forEach(b => b.setAttribute('aria-pressed', 'false'));
-      btn.setAttribute('aria-pressed', 'true');
-      mv.src = btn.dataset.src;
-      mv.alt = 'A 3D ' + btn.dataset.name.toLowerCase() + ' from LeafCon';
-    });
-  });
-  mv.addEventListener('load', () => {
-    document.getElementById('noAr').hidden = mv.canActivateAR;
-  });
-</script>
+<script type="module" src="app.js"></script>
 </body>
 </html>
