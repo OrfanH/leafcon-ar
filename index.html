@@ -46,8 +46,18 @@
   .brand { font-family: "Bricolage Grotesque", system-ui, sans-serif; font-weight: 700; font-size: 34px;
     color: var(--green); letter-spacing: -0.02em; margin: 0; }
   .claim { margin: 2px 0 0; font-size: 17px; color: var(--muted); }
-  #start h1 { font-family: "Bricolage Grotesque", system-ui, sans-serif; font-size: 30px; line-height: 1.1;
-    letter-spacing: -0.02em; margin: auto 0 16px; }
+  #start h1 { font-family: "Bricolage Grotesque", system-ui, sans-serif; font-size: 28px; line-height: 1.1;
+    letter-spacing: -0.02em; margin: 0 0 14px; }
+  .hero { position: relative; margin: 16px 0 20px; border-radius: 18px; overflow: hidden; min-height: 160px;
+    flex: 1 1 auto; background: #ccc; }
+  .hero img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+  .hero .after { animation: grow 6s ease-in-out infinite; }
+  .hero .tag { position: absolute; left: 10px; bottom: 10px; font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 12px; padding: 5px 9px; border-radius: 999px; background: rgba(23,34,27,.75); color: #fff; }
+  .hero .after-tag { background: var(--green); animation: grow 6s ease-in-out infinite; }
+  @keyframes grow { 0%, 30% { opacity: 0 } 45%, 85% { opacity: 1 } 100% { opacity: 0 } }
+  @media (prefers-reduced-motion: reduce) { .hero .after, .hero .after-tag { animation: none; opacity: 1 } }
+  @media (max-height: 700px) { .hero { display: none } #start h1 { margin-top: auto } }
   .steps { list-style: none; padding: 0; margin: 0 0 24px; display: grid; gap: 10px; }
   .steps li { display: flex; gap: 12px; align-items: center; font-size: 16px; }
   .steps b { font-family: "IBM Plex Mono", ui-monospace, monospace; font-weight: 500; color: var(--green);
@@ -76,9 +86,19 @@
   #selbar button { background: var(--glass); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
     border: 0; border-radius: 999px; padding: 10px 16px; font-weight: 600; font-size: 15px; box-shadow: 0 2px 10px rgba(0,0,0,.15); }
   #selbar .danger { color: #B42318; }
-  #tray { display: flex; gap: 8px; overflow-x: auto; padding: 4px 12px; scroll-snap-type: x mandatory; scrollbar-width: none; }
+  #tray { display: flex; gap: 8px; overflow-x: auto; padding: 4px 12px; scrollbar-width: none; }
   #tray::-webkit-scrollbar { display: none; }
-  .item { flex: none; width: 92px; scroll-snap-align: start; background: var(--glass); backdrop-filter: blur(10px);
+  .tray-label { flex: none; writing-mode: vertical-rl; transform: rotate(180deg); align-self: center;
+    font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+    color: #fff; background: rgba(23,34,27,.7); border-radius: 8px; padding: 8px 3px; }
+  #money { display: block; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11px; color: var(--green-dark); margin-top: 2px; }
+  #scenes { position: absolute; top: calc(60px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
+    display: flex; gap: 4px; background: var(--glass); border-radius: 999px; padding: 4px; box-shadow: 0 2px 10px rgba(0,0,0,.15); }
+  #scenes button { border: 0; background: transparent; border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 600; }
+  #scenes button[aria-pressed="true"] { background: var(--green); color: #fff; }
+  .pulse { animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(47,125,79,.6) } 50% { box-shadow: 0 0 0 10px rgba(47,125,79,0) } }
+  .item { flex: none; width: 82px; scroll-snap-align: start; background: var(--glass); backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px); border: 2px solid transparent; border-radius: 16px; padding: 6px 4px 8px;
     text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,.15); }
   .item img { width: 64px; height: 64px; object-fit: contain; display: block; margin: 0 auto 2px; }
@@ -95,7 +115,13 @@
   /* Photo sheet */
   #sheet { position: fixed; inset: 0; z-index: 35; background: rgba(0,0,0,.6); display: flex; align-items: flex-end; }
   #sheet .card { background: var(--bg); width: 100%; border-radius: 20px 20px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); }
-  #sheet img { width: 100%; max-height: 55vh; object-fit: contain; border-radius: 12px; background: #000; display: block; }
+  #sheet img { max-width: 100%; max-height: 48vh; object-fit: contain; border-radius: 12px; display: block; margin: 0 auto;
+    box-shadow: 0 4px 16px rgba(0,0,0,.2); }
+  #sheet h2 { font-family: "Bricolage Grotesque", system-ui, sans-serif; font-size: 22px; margin: 14px 0 2px; letter-spacing: -0.01em; }
+  #sheet .plan { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px; color: var(--green-dark); margin: 2px 0; }
+  #sheet .meet { margin: 10px 0 0; font-size: 15px; line-height: 1.35; }
+  #sheet .meet b { color: var(--green); }
+  #sheet .fine { text-align: left; margin-top: 6px; }
   #sheet .row { display: flex; gap: 8px; margin-top: 12px; }
   #sheet .row button { flex: 1; }
   .ghost { background: transparent; border: 2px solid var(--line); border-radius: 999px; padding: 14px; font-weight: 600; font-size: 16px; }
@@ -109,11 +135,17 @@
     <p class="brand">LeafCon</p>
     <p class="claim">The air-con made of leaves.</p>
   </div>
-  <h1>See your office green. Right now.</h1>
+  <figure class="hero" aria-label="The same company grounds: grey and sealed, then green with trees">
+    <img src="img/01-sealed.jpg" alt="">
+    <img src="img/04-green.jpg" alt="" class="after">
+    <span class="tag before-tag">Today: 70 °C asphalt</span>
+    <span class="tag after-tag">With LeafCon</span>
+  </figure>
+  <h1>Plant your trees. Right here, right now.</h1>
   <ol class="steps">
-    <li><b>1</b>Point your phone at the floor.</li>
-    <li><b>2</b>Pick a plant. Tap the floor to plant it.</li>
-    <li><b>3</b>Drag to move. Walk around it. Take a photo.</li>
+    <li><b>1</b>Point your phone at the floor or table.</li>
+    <li><b>2</b>Pick a tree. Tap to plant it at real size.</li>
+    <li><b>3</b>See the price live. Keep a photo of your plan.</li>
   </ol>
   <button class="cta" id="go">Start AR</button>
   <button class="link" id="demo">No camera? Try our 3D office demo</button>
@@ -132,6 +164,10 @@
       </button>
     </div>
   </div>
+  <div id="scenes" class="hidden" role="group" aria-label="Scene">
+    <button type="button" data-scene="grounds" aria-pressed="true">Company grounds</button>
+    <button type="button" data-scene="office" aria-pressed="false">Office</button>
+  </div>
   <div id="hint">Move your phone slowly to find the floor.</div>
   <div class="tray-wrap">
     <div id="selbar" class="hidden">
@@ -140,7 +176,7 @@
       <button id="done">Done</button>
     </div>
     <div class="topbar" style="position:static;margin:0 12px 8px;">
-      <span class="pill"><span id="count">0 plants</span></span>
+      <span class="pill" style="border-radius:14px"><span id="count">Nothing planted yet</span><span id="money" class="hidden"></span></span>
     </div>
     <div id="tray" role="group" aria-label="Plants"></div>
   </div>
@@ -148,7 +184,12 @@
 
 <div id="sheet" class="hidden">
   <div class="card">
-    <img id="shot" alt="Photo of your green office">
+    <img id="shot" alt="Photo of your green plan">
+    <h2 id="planTitle"></h2>
+    <p class="plan" id="planMoney"></p>
+    <p class="plan" id="planShade"></p>
+    <p class="meet">Want this on your grounds? <b>Find the LeafCon team in the room</b>. We plant it with your staff.</p>
+    <p class="fine">Net list prices: tree package €990 per tree. Care Plus €99 per site + €29 per tree per month, 24 months.</p>
     <div class="row">
       <button class="ghost" id="closeSheet">Back</button>
       <button class="cta" id="share">Save / share</button>

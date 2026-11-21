@@ -10,13 +10,20 @@ import {GroundedSkybox} from 'three/addons/objects/GroundedSkybox.js'
 
 window.THREE = THREE  // 8th Wall's XR8.Threejs module reads window.THREE.
 
+// kind 'tree' = LeafCon tree package (priced). kind 'plant' = office green, shown without a price.
 const PLANTS = [
-  {id: 'ficus', name: 'Ficus', size: '1.35 m'},
-  {id: 'moneytree', name: 'Money tree', size: '2.3 m'},
-  {id: 'syngonium', name: 'Syngonium', size: '0.85 m'},
-  {id: 'planter', name: 'Planter', size: '1.3 m wide'},
-  {id: 'raisedbed', name: 'Raised bed', size: '1 m'},
+  {id: 'youngtree', kind: 'tree', name: 'City tree', size: '4.5 m'},
+  {id: 'islandtree', kind: 'tree', name: 'Multi-stem', size: '3.4 m'},
+  {id: 'ficus', kind: 'plant', name: 'Ficus', size: '1.35 m'},
+  {id: 'moneytree', kind: 'plant', name: 'Money tree', size: '1.9 m'},
+  {id: 'syngonium', kind: 'plant', name: 'Syngonium', size: '0.85 m'},
+  {id: 'planter', kind: 'plant', name: 'Planter', size: '1.3 m wide'},
+  {id: 'raisedbed', kind: 'plant', name: 'Raised bed', size: '1 m'},
 ]
+const KIND = Object.fromEntries(PLANTS.map((p) => [p.id, p.kind]))
+// LeafCon list prices, net (Lean Canvas, 21.11.2026).
+const PRICE = {tree: 990, carePerSite: 99, carePerTree: 29}
+const eur = (n) => '€' + n.toLocaleString('en-US')
 const CAMERA_HEIGHT = 1.45  // metres, phone held at chest height. Sets the AR scale.
 const params = new URLSearchParams(location.search)
 let PREVIEW = params.has('preview') || params.has('demo')
@@ -30,6 +37,9 @@ const loadPlant = (id) => {
       g.scene.traverse((o) => {
         if (o.isMesh) { o.castShadow = true; o.receiveShadow = true }
       })
+      // Crown footprint (circle over the mean of width and depth): the shade at midday.
+      const s = new THREE.Box3().setFromObject(g.scene).getSize(new THREE.Vector3())
+      g.scene.userData.shadeM2 = Math.PI * Math.pow((s.x + s.z) / 4, 2)
       return g.scene
     }).catch((e) => { cache.delete(id); throw e }))
   }
@@ -105,7 +115,7 @@ function floorHitAt(clientX, clientY) {
   const hit = raycaster.intersectObject(floor)[0]
   if (!hit) return null
   // Ignore hits too far away: they are imprecise and place plants out of view.
-  if (hit.distance > 12) return null
+  if (hit.distance > (PREVIEW ? 25 : 12)) return null
   return hit.point
 }
 
@@ -169,14 +179,16 @@ async function placeAt(point) {
   const cam = state.world.camera.position
   root.rotation.y = Math.atan2(cam.x - point.x, cam.z - point.z) + (Math.random() - 0.5) * 0.6
   root.scale.setScalar(0.01)
-  const plant = {root, type}
+  const plant = {root, type, shadeM2: proto.userData.shadeM2}
   root.userData.plant = plant
   state.world.scene.add(root)
   state.placed.push(plant)
   animate(root, 0.01, 1, 650)
   updateCount()
-  if (state.placed.length === 1) setHint('Nice. Drag a plant to move it. Tap it to rotate or remove.', false, 3500)
+  if (state.placed.length === 1) setHint('Nice. Drag to move it. Tap it to rotate or remove.', false, 3500)
+  else if (state.placed.length === 3) setHint('Looks good! Tap the camera to keep your green plan.', false, 4000)
   else hideHint()
+  $('photo').classList.toggle('pulse', state.placed.length >= 3)
 }
 
 function select(plant) {
@@ -198,9 +210,28 @@ function removePlant(plant) {
   updateCount()
 }
 
+// The live business line: what the placed trees cost and how much shade they give.
+function summary() {
+  const trees = state.placed.filter((p) => KIND[p.type] === 'tree')
+  const plants = state.placed.length - trees.length
+  const shade = Math.round(trees.reduce((a, p) => a + (p.shadeM2 || 0), 0))
+  const once = trees.length * PRICE.tree
+  const care = trees.length ? PRICE.carePerSite + trees.length * PRICE.carePerTree : 0
+  const parts = []
+  if (trees.length) parts.push(trees.length === 1 ? '1 tree' : `${trees.length} trees`)
+  if (plants) parts.push(plants === 1 ? '1 plant' : `${plants} plants`)
+  return {
+    trees: trees.length, plants, shade, once, care,
+    title: parts.join(' + ') || 'Nothing planted yet',
+    money: trees.length ? `${eur(once)} once · care ${eur(care)}/month` : '',
+    shadeText: trees.length ? `≈ ${shade} m² of shade` : '',
+  }
+}
 function updateCount() {
-  const n = state.placed.length
-  $('count').textContent = n === 1 ? '1 plant' : `${n} plants`
+  const s = summary()
+  $('count').textContent = s.title
+  $('money').textContent = s.money ? `${s.money} · ${s.shadeText}` : ''
+  $('money').classList.toggle('hidden', !s.money)
 }
 
 let hintTimer
@@ -256,7 +287,15 @@ function bindPointer(canvas) {
 // ---------- UI ----------
 function buildTray() {
   const tray = $('tray')
+  let lastKind = null
   for (const p of PLANTS) {
+    if (p.kind !== lastKind) {
+      const label = document.createElement('span')
+      label.className = 'tray-label'
+      label.textContent = p.kind === 'tree' ? 'Trees · €990' : 'Office green'
+      tray.appendChild(label)
+      lastKind = p.kind
+    }
     const b = document.createElement('button')
     b.className = 'item'
     b.type = 'button'
@@ -301,13 +340,24 @@ async function takePhoto() {
     if (PREVIEW) {
       const {renderer, scene, camera} = state.world
       renderer.render(scene, camera)
-      dataUrl = renderer.domElement.toDataURL('image/jpeg', 0.9)
+      const c = document.createElement('canvas')
+      c.width = renderer.domElement.width; c.height = renderer.domElement.height
+      const ctx = c.getContext('2d')
+      ctx.drawImage(renderer.domElement, 0, 0)
+      stampBrand(ctx, c)
+      dataUrl = c.toDataURL('image/jpeg', 0.9)
     } else {
       const b64 = await XR8.CanvasScreenshot.takeScreenshot({onProcessFrame: ({ctx, canvas}) => stampBrand(ctx, canvas)})
       dataUrl = 'data:image/jpeg;base64,' + b64
     }
     lastPhotoBlob = await (await fetch(dataUrl)).blob()
     $('shot').src = dataUrl
+    const s = summary()
+    $('planTitle').textContent = s.title
+    $('planMoney').textContent = s.money
+    $('planShade').textContent = s.shadeText
+    $('planMoney').classList.toggle('hidden', !s.money)
+    $('planShade').classList.toggle('hidden', !s.shadeText)
     $('sheet').classList.remove('hidden')
   } catch (e) {
     setHint('Photo failed. Try again.', true, 2500)
@@ -315,19 +365,33 @@ async function takePhoto() {
   if (wasActive) select(wasActive)
 }
 
+// Burns a LeafCon footer into the photo: logo, claim, and the plan with its price.
 function stampBrand(ctx, canvas) {
   const s = canvas.width / 400
+  const sum = summary()
+  const h = (sum.money ? 74 : 52) * s
+  const y = canvas.height - h
   ctx.save()
-  ctx.fillStyle = 'rgba(255,255,255,.9)'
-  const w = 170 * s, h = 34 * s, x = 12 * s, y = canvas.height - h - 12 * s
-  ctx.beginPath(); ctx.roundRect(x, y, w, h, h / 2); ctx.fill()
-  ctx.fillStyle = '#2F7D4F'
-  ctx.font = `700 ${16 * s}px "Bricolage Grotesque", system-ui, sans-serif`
-  ctx.textBaseline = 'middle'
-  ctx.fillText('LeafCon', x + 12 * s, y + h / 2)
-  ctx.fillStyle = '#5B6B60'
-  ctx.font = `500 ${10 * s}px "Instrument Sans", system-ui, sans-serif`
-  ctx.fillText('air-con made of leaves', x + 80 * s, y + h / 2)
+  const grad = ctx.createLinearGradient(0, y - 30 * s, 0, canvas.height)
+  grad.addColorStop(0, 'rgba(23,34,27,0)')
+  grad.addColorStop(0.35, 'rgba(23,34,27,.78)')
+  grad.addColorStop(1, 'rgba(23,34,27,.92)')
+  ctx.fillStyle = grad
+  ctx.fillRect(0, y - 30 * s, canvas.width, h + 30 * s)
+  ctx.textBaseline = 'alphabetic'
+  ctx.fillStyle = '#9FD8B2'
+  ctx.font = `700 ${20 * s}px "Bricolage Grotesque", system-ui, sans-serif`
+  ctx.fillText('LeafCon', 16 * s, y + 22 * s)
+  ctx.fillStyle = '#FFFFFF'
+  ctx.font = `500 ${11 * s}px "Instrument Sans", system-ui, sans-serif`
+  ctx.fillText('The air-con made of leaves', 100 * s, y + 21 * s)
+  ctx.font = `600 ${12 * s}px "Instrument Sans", system-ui, sans-serif`
+  ctx.fillText(`My green plan: ${sum.title}`, 16 * s, y + 42 * s)
+  if (sum.money) {
+    ctx.fillStyle = '#CFE9D8'
+    ctx.font = `500 ${11 * s}px "IBM Plex Mono", ui-monospace, monospace`
+    ctx.fillText(`${sum.money} · ${sum.shadeText}`, 16 * s, y + 60 * s)
+  }
   ctx.restore()
 }
 
@@ -393,24 +457,40 @@ function startPreview() {
   const scene = new THREE.Scene()
   scene.background = new THREE.Color(0xd9ddd6)
   const camera = new THREE.PerspectiveCamera(62, 1, 0.05, 100)
-  camera.position.set(0.4, DEMO_EYE_HEIGHT, 3.4)
+  camera.position.set(0.8, DEMO_EYE_HEIGHT, 6)
   initScene({scene, camera, renderer})
-  new THREE.TextureLoader().load('env/office.jpg', (tex) => {
-    tex.mapping = THREE.EquirectangularReflectionMapping
-    tex.colorSpace = THREE.SRGBColorSpace
-    const sky = new GroundedSkybox(tex, DEMO_EYE_HEIGHT, 30)
-    sky.position.y = DEMO_EYE_HEIGHT - 0.01
-    scene.add(sky)
-    scene.environment = tex
-    scene.environmentIntensity = 0.8
-    renderer.toneMapping = THREE.NoToneMapping  // the panorama is already tone-mapped
-    state.demoReady = true
-  })
+  // Two scenes: company grounds (Poly Haven "Neuer Zollhof", a sealed office plaza) and an office.
+  let sky = null
   const controls = new OrbitControls(camera, canvas)
-  controls.target.set(0, 0.7, 0)
+  // The panorama looks right only near its own camera spot. A room needs a closer view.
+  const VIEWS = {
+    grounds: {radius: 60, cam: [0.8, DEMO_EYE_HEIGHT, 6], target: [0, 1.4, -1], max: 14},
+    office: {radius: 10, cam: [0.3, DEMO_EYE_HEIGHT, 2.6], target: [0, 1.1, -1], max: 4.5},
+  }
+  const texLoader = new THREE.TextureLoader()
+  const loadScene = (name) => {
+    state.demoReady = false
+    texLoader.load(`env/${name}.jpg`, (tex) => {
+      tex.mapping = THREE.EquirectangularReflectionMapping
+      tex.colorSpace = THREE.SRGBColorSpace
+      if (sky) { scene.remove(sky); sky.material.map?.dispose(); sky.geometry.dispose() }
+      const v = VIEWS[name]
+      sky = new GroundedSkybox(tex, DEMO_EYE_HEIGHT, v.radius)
+      camera.position.set(...v.cam); controls.target.set(...v.target); controls.maxDistance = v.max; controls.update()
+      sky.position.y = DEMO_EYE_HEIGHT - 0.01
+      scene.add(sky)
+      scene.environment = tex
+      scene.environmentIntensity = 0.8
+      renderer.toneMapping = THREE.NoToneMapping  // the panorama is already tone-mapped
+      state.demoReady = true
+    })
+    document.querySelectorAll('#scenes button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.scene === name)))
+  }
+  document.querySelectorAll('#scenes button').forEach((b) => b.addEventListener('click', () => loadScene(b.dataset.scene)))
+  $('scenes').classList.remove('hidden')
+  loadScene(params.get('scene') === 'office' ? 'office' : 'grounds')
   controls.enablePan = false
   controls.minDistance = 1.2
-  controls.maxDistance = 7
   controls.maxPolarAngle = THREE.MathUtils.degToRad(86)
   // Capture phase runs before OrbitControls: no orbiting while a plant is dragged.
   canvas.addEventListener('pointerdown', (e) => { controls.enabled = !plantHitAt(e.clientX, e.clientY) }, true)
