@@ -364,6 +364,9 @@ function leafconModule() {
 
 function startAR() {
   const run = () => {
+    // Absolute scale: the engine measures real metres, so plants keep their true size
+    // on a floor and on a table. ?scale=responsive switches back to the guessed scale.
+    XR8.XrController.configure({scale: params.get('scale') === 'responsive' ? 'responsive' : 'absolute'})
     XR8.addCameraPipelineModules([
       XR8.GlTextureRenderer.pipelineModule(),
       XR8.Threejs.pipelineModule(),
