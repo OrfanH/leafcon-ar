@@ -34,14 +34,33 @@ const loadPlant = (id) => {
       g.scene.traverse((o) => {
         if (o.isMesh) { o.castShadow = true; o.receiveShadow = true }
       })
+      g.scene.updateMatrixWorld(true)
+      const box = new THREE.Box3().setFromObject(g.scene)
+      // Base = mean of all vertices in the lowest 4 cm: the trunk of a tree, the middle of a pot.
+      const v = new THREE.Vector3(), base = new THREE.Vector3()
+      let n = 0
+      g.scene.traverse((o) => {
+        const pos = o.isMesh && o.geometry.attributes.position
+        if (!pos) return
+        for (let i = 0; i < pos.count; i += 3) {
+          v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld)
+          if (v.y < box.min.y + 0.04) { base.x += v.x; base.z += v.z; n++ }
+        }
+      })
+      if (n) base.divideScalar(n)
+      g.scene.position.x -= base.x
+      g.scene.position.z -= base.z
+      const proto = new THREE.Group()
+      proto.add(g.scene)
       // Crown footprint (circle over the mean of width and depth): the shade at midday.
-      const s = new THREE.Box3().setFromObject(g.scene).getSize(new THREE.Vector3())
-      g.scene.userData.shadeM2 = Math.PI * Math.pow((s.x + s.z) / 4, 2)
-      g.scene.userData.crownR = (s.x + s.z) / 4
-      g.scene.userData.footR = Math.max(s.x, s.z) / 2
+      const s = box.getSize(new THREE.Vector3())
+      proto.userData.shadeM2 = Math.PI * Math.pow((s.x + s.z) / 4, 2)
+      proto.userData.crownR = (s.x + s.z) / 4
+      proto.userData.footR = Math.max(s.x, s.z) / 2
+      proto.userData.height = s.y
       state.protos = state.protos || {}
-      state.protos[id] = g.scene
-      return g.scene
+      state.protos[id] = proto
+      return proto
     }).catch((e) => { cache.delete(id); throw e }))
   }
   return cache.get(id)
@@ -62,6 +81,7 @@ const state = {
 // A 4.5 m tree on a table is just a pole, so trees become 1:12 models on an asphalt tile.
 const TABLE_MAX_HEIGHT = 0.8  // a seated guest holds the phone about 1 m above the floor
 const MINI = 1 / 12
+const TILE_H = 0.01  // metres: the 1:12 asphalt tile is a thin slab
 const onTable = () => params.has('table') || (!PREVIEW && state.world?.camera.position.y - state.surfaceY < TABLE_MAX_HEIGHT)
 
 // Soft round textures, drawn once: a dark contact shadow and a cool shade patch.
@@ -207,15 +227,58 @@ function plantHitAt(clientX, clientY) {
   return o ? o.userData.plant : null
 }
 
+// Shows the cooling: a cool wave runs out to the crown edge, a short label floats up.
+function labelSprite(text) {
+  const c = document.createElement('canvas')
+  c.width = 512; c.height = 112
+  const g = c.getContext('2d')
+  g.fillStyle = 'rgba(23,60,40,.88)'
+  g.beginPath(); g.roundRect(4, 4, 504, 104, 52); g.fill()
+  g.fillStyle = '#ffffff'; g.font = '600 40px "Instrument Sans", system-ui, sans-serif'
+  g.textAlign = 'center'; g.textBaseline = 'middle'
+  g.fillText(text, 256, 58)
+  const t = new THREE.CanvasTexture(c)
+  t.colorSpace = THREE.SRGBColorSpace
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({map: t, transparent: true, depthTest: false, sizeAttenuation: false}))
+  sp.scale.set(0.42, 0.092, 1)
+  sp.renderOrder = 10
+  return sp
+}
+function coolEffect(root, crownR, height, delay) {
+  const scene = state.world.scene
+  const wave = new THREE.Mesh(new THREE.RingGeometry(0.86, 1, 64), new THREE.MeshBasicMaterial({color: 0x7cc8ff, transparent: true, opacity: 0, depthWrite: false}))
+  wave.rotateX(-Math.PI / 2)
+  wave.position.copy(root.position).y += 0.01
+  scene.add(wave)
+  const t0 = performance.now() + delay
+  state.anims.push({t0, ms: 1400, step: (t) => {
+    wave.scale.setScalar(Math.max(0.01, crownR * (1 - Math.pow(1 - t, 3))))
+    wave.material.opacity = t <= 0 ? 0 : 0.7 * (1 - t)
+    if (t >= 1) { scene.remove(wave); wave.geometry.dispose(); wave.material.dispose() }
+  }})
+  const label = labelSprite('Shade: 11–25 °C cooler')
+  label.material.opacity = 0
+  label.position.copy(root.position).y += height * 0.75
+  scene.add(label)
+  const y0 = label.position.y
+  state.anims.push({t0, ms: 2600, step: (t) => {
+    label.material.opacity = t <= 0 ? 0 : Math.min(1, t * 6, (1 - t) * 4)
+    label.position.y = y0 + height * 0.12 * t
+    label.visible = !state.shooting
+    if (t >= 1) { scene.remove(label); label.material.map.dispose(); label.material.dispose() }
+  }})
+}
+
 const easeOutBack = (t) => 1 + 2.2 * Math.pow(t - 1, 3) + 1.2 * Math.pow(t - 1, 2)
 function animate(obj, from, to, ms, prop = 'scale') {
   state.anims.push({obj, from, to, ms, prop, t0: performance.now()})
 }
 function tick(now) {
   state.anims = state.anims.filter((a) => {
-    const t = Math.min(1, (now - a.t0) / a.ms)
+    const t = Math.min(1, Math.max(0, (now - a.t0) / a.ms))
     const k = easeOutBack(t)
-    if (a.prop === 'scale') a.obj.scale.setScalar(a.from + (a.to - a.from) * k)
+    if (a.step) a.step(t)
+    else if (a.prop === 'scale') a.obj.scale.setScalar(a.from + (a.to - a.from) * k)
     else if (a.prop === 'rotY') a.obj.rotation.y = a.from + (a.to - a.from) * (1 - Math.pow(1 - t, 3))
     return t < 1
   })
@@ -230,12 +293,32 @@ const _fwd = new THREE.Vector3()
 function followSun() {
   const {sun, sunDir, world} = state
   if (!sun || !world) return
-  // Centre the shadow box a few metres in front of the camera, on the floor.
-  world.camera.getWorldDirection(_fwd).setY(0)
-  if (_fwd.lengthSq() < 1e-6) _fwd.set(0, 0, -1)
-  _fwd.normalize().multiplyScalar(4).add(world.camera.position).setY(0)
+  let half = 10
+  if (state.placed.length) {
+    // Fit the shadow box around everything placed: a small box gives sharp shadows.
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, h = 0
+    for (const p of state.placed) {
+      const q = p.root.position
+      x0 = Math.min(x0, q.x - p.reach); x1 = Math.max(x1, q.x + p.reach)
+      z0 = Math.min(z0, q.z - p.reach); z1 = Math.max(z1, q.z + p.reach)
+      h = Math.max(h, p.height)
+    }
+    _fwd.set((x0 + x1) / 2, state.placed.at(-1).root.position.y, (z0 + z1) / 2)
+    half = Math.min(15, Math.max(0.5, Math.max(x1 - x0, z1 - z0) / 2 + h * 1.2))
+  } else {
+    // Nothing yet: a box a few metres in front of the camera.
+    world.camera.getWorldDirection(_fwd).setY(0)
+    if (_fwd.lengthSq() < 1e-6) _fwd.set(0, 0, -1)
+    _fwd.normalize().multiplyScalar(4).add(world.camera.position).setY(state.surfaceY)
+  }
+  const cam = sun.shadow.camera
+  if (cam.right !== half) {
+    cam.left = cam.bottom = -half; cam.right = cam.top = half
+    cam.far = half * 4 + 20
+    cam.updateProjectionMatrix()
+  }
   sun.target.position.copy(_fwd)
-  sun.position.copy(_fwd).addScaledVector(sunDir, 15)
+  sun.position.copy(_fwd).addScaledVector(sunDir, half * 2 + 10)
 }
 
 // How big the next plant is: trees show their shade circle, plants their footprint.
@@ -296,21 +379,43 @@ async function placeAt(point) {
   const lift = (state.placed.length % 10) * 0.0006  // overlapping discs must not flicker
   const blobR = isTree ? 0.35 * k : footR * k * 0.6
   root.add(noRaycast(flatDisc(Math.max(0.02, blobR), new THREE.MeshBasicMaterial({map: blobTex, transparent: true, depthWrite: false}), 0.004 + lift)))
+  const tileR = Math.max(0.12, crownR * k * 1.25)
   if (mini && isTree) {
-    const tile = flatDisc(Math.max(0.12, crownR * k * 1.25), new THREE.MeshStandardMaterial({map: tileTex, roughness: 0.95}), 0.002 + lift)
+    const edge = new THREE.MeshStandardMaterial({color: 0x3f4140, roughness: 0.9})
+    const tile = new THREE.Mesh(new THREE.CylinderGeometry(tileR, tileR, TILE_H, 48),
+      [edge, new THREE.MeshStandardMaterial({map: tileTex, roughness: 0.95}), edge])
+    tile.position.y = TILE_H / 2
     tile.receiveShadow = true
     root.add(tile)
+    body.position.y = TILE_H
+    // Push the new tile out of any tile it overlaps, so labels stay readable.
+    for (let pass = 0; pass < 6; pass++) {
+      let moved = false
+      for (const o of state.placed) {
+        if (!o.tileR) continue
+        const d = new THREE.Vector3().subVectors(point, o.root.position).setY(0)
+        const need = o.tileR + tileR + 0.01
+        if (d.length() < need) {
+          if (d.lengthSq() < 1e-8) d.set(1, 0, 0)
+          point.copy(o.root.position).addScaledVector(d.normalize(), need).setY(point.y)
+          moved = true
+        }
+      }
+      if (!moved) break
+    }
   }
   root.position.copy(point)
   // Face the plant's front to the viewer, with a little random turn so groups look natural.
   const cam = state.world.camera.position
   root.rotation.y = Math.atan2(cam.x - point.x, cam.z - point.z) + (Math.random() - 0.5) * 0.6
   root.scale.setScalar(0.01)
-  const plant = {root, type, shadeM2: proto.userData.shadeM2 * vary * vary}
+  const plant = {root, type, mini, shadeM2: proto.userData.shadeM2 * vary * vary, tileR: mini && isTree ? tileR : 0,
+    reach: Math.max(crownR, footR) * k, height: proto.userData.height * k}
   root.userData.plant = plant
   state.world.scene.add(root)
   state.placed.push(plant)
   animate(root, 0.01, 1, 650)
+  if (isTree) coolEffect(root, crownR * k, proto.userData.height * k + (mini ? TILE_H : 0), 450)
   updateCount()
   if (mini && !state.miniHinted) {
     state.miniHinted = true
@@ -351,7 +456,7 @@ function summary() {
   return {
     trees: trees.length, plants, shade,
     title: parts.join(' + ') || 'Nothing planted yet',
-    shadeText: trees.length ? `≈ ${shade} m² of shade` : '',
+    shadeText: trees.length ? `≈ ${shade} m² of shade${trees.some((p) => p.mini) ? ' at real size' : ''}` : '',
   }
 }
 function updateCount() {
@@ -650,7 +755,7 @@ function startPreview() {
   resize()
   renderer.setAnimationLoop((t) => { controls.update(); tick(performance.now()); renderer.render(scene, camera) })
   $('ui').classList.remove('hidden')
-  window.__leafcon = {state, placeAt, THREE, controls}  // for automated tests
+  window.__leafcon = {state, placeAt, THREE, controls, coolEffect}  // for automated tests
 }
 
 buildTray()
