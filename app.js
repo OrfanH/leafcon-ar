@@ -224,14 +224,16 @@ function summary() {
     trees: trees.length, plants, shade, once, care,
     title: parts.join(' + ') || 'Nothing planted yet',
     money: trees.length ? `${eur(once)} once · care ${eur(care)}/month` : '',
+    total: trees.length ? `24-month total ${eur(once + 24 * care)}` : '',
     shadeText: trees.length ? `≈ ${shade} m² of shade` : '',
+    green: plants ? 'Office green: quoted on site' : '',
   }
 }
 function updateCount() {
   const s = summary()
   $('count').textContent = s.title
-  $('money').textContent = s.money ? `${s.money} · ${s.shadeText}` : ''
-  $('money').classList.toggle('hidden', !s.money)
+  $('money').textContent = s.money ? `${s.money} · ${s.shadeText}` : s.green
+  $('money').classList.toggle('hidden', !s.money && !s.green)
 }
 
 let hintTimer
@@ -298,6 +300,7 @@ function buildTray() {
     }
     const b = document.createElement('button')
     b.className = 'item'
+    b.dataset.id = p.id
     b.type = 'button'
     b.setAttribute('aria-pressed', String(p.id === state.selectedType))
     b.innerHTML = `<img src="thumbs/${p.id}.webp" alt=""><span class="n">${p.name}</span><span class="s">${p.size}</span>`
@@ -354,10 +357,10 @@ async function takePhoto() {
     $('shot').src = dataUrl
     const s = summary()
     $('planTitle').textContent = s.title
-    $('planMoney').textContent = s.money
-    $('planShade').textContent = s.shadeText
+    $('planMoney').textContent = [s.money, s.total].filter(Boolean).join('\n')
+    $('planShade').textContent = [s.shadeText, s.green].filter(Boolean).join('\n')
     $('planMoney').classList.toggle('hidden', !s.money)
-    $('planShade').classList.toggle('hidden', !s.shadeText)
+    $('planShade').classList.toggle('hidden', !$('planShade').textContent)
     $('sheet').classList.remove('hidden')
   } catch (e) {
     setHint('Photo failed. Try again.', true, 2500)
@@ -369,29 +372,28 @@ async function takePhoto() {
 function stampBrand(ctx, canvas) {
   const s = canvas.width / 400
   const sum = summary()
-  const h = (sum.money ? 74 : 52) * s
+  const lines = sum.money ? [sum.money, `${sum.total} · ${sum.shadeText}`] : sum.green ? [sum.green] : []
+  const h = (62 + lines.length * 21) * s
   const y = canvas.height - h
   ctx.save()
   const grad = ctx.createLinearGradient(0, y - 30 * s, 0, canvas.height)
   grad.addColorStop(0, 'rgba(23,34,27,0)')
-  grad.addColorStop(0.35, 'rgba(23,34,27,.78)')
-  grad.addColorStop(1, 'rgba(23,34,27,.92)')
+  grad.addColorStop(0.35, 'rgba(23,34,27,.8)')
+  grad.addColorStop(1, 'rgba(23,34,27,.94)')
   ctx.fillStyle = grad
   ctx.fillRect(0, y - 30 * s, canvas.width, h + 30 * s)
   ctx.textBaseline = 'alphabetic'
   ctx.fillStyle = '#9FD8B2'
-  ctx.font = `700 ${20 * s}px "Bricolage Grotesque", system-ui, sans-serif`
-  ctx.fillText('LeafCon', 16 * s, y + 22 * s)
+  ctx.font = `700 ${26 * s}px "Bricolage Grotesque", system-ui, sans-serif`
+  ctx.fillText('LeafCon', 16 * s, y + 26 * s)
   ctx.fillStyle = '#FFFFFF'
-  ctx.font = `500 ${11 * s}px "Instrument Sans", system-ui, sans-serif`
-  ctx.fillText('The air-con made of leaves', 100 * s, y + 21 * s)
-  ctx.font = `600 ${12 * s}px "Instrument Sans", system-ui, sans-serif`
-  ctx.fillText(`My green plan: ${sum.title}`, 16 * s, y + 42 * s)
-  if (sum.money) {
-    ctx.fillStyle = '#CFE9D8'
-    ctx.font = `500 ${11 * s}px "IBM Plex Mono", ui-monospace, monospace`
-    ctx.fillText(`${sum.money} · ${sum.shadeText}`, 16 * s, y + 60 * s)
-  }
+  ctx.font = `500 ${14 * s}px "Instrument Sans", system-ui, sans-serif`
+  ctx.fillText('The air-con made of leaves', 128 * s, y + 25 * s)
+  ctx.font = `600 ${17 * s}px "Instrument Sans", system-ui, sans-serif`
+  ctx.fillText(`My green plan: ${sum.title}`, 16 * s, y + 51 * s)
+  ctx.fillStyle = '#CFE9D8'
+  ctx.font = `500 ${13 * s}px "IBM Plex Mono", ui-monospace, monospace`
+  lines.forEach((t, i) => ctx.fillText(t, 16 * s, y + (73 + i * 21) * s))
   ctx.restore()
 }
 
@@ -464,8 +466,8 @@ function startPreview() {
   const controls = new OrbitControls(camera, canvas)
   // The panorama looks right only near its own camera spot. A room needs a closer view.
   const VIEWS = {
-    grounds: {radius: 60, cam: [0.8, DEMO_EYE_HEIGHT, 6], target: [0, 1.4, -1], max: 14},
-    office: {radius: 10, cam: [0.3, DEMO_EYE_HEIGHT, 2.6], target: [0, 1.1, -1], max: 4.5},
+    grounds: {pick: 'youngtree', radius: 60, cam: [0.8, DEMO_EYE_HEIGHT, 6], target: [0, 1.4, -1], max: 14},
+    office: {pick: 'ficus', radius: 10, cam: [0.3, DEMO_EYE_HEIGHT, 2.6], target: [0, 1.1, -1], max: 4.5},
   }
   const texLoader = new THREE.TextureLoader()
   const loadScene = (name) => {
@@ -475,6 +477,7 @@ function startPreview() {
       tex.colorSpace = THREE.SRGBColorSpace
       if (sky) { scene.remove(sky); sky.material.map?.dispose(); sky.geometry.dispose() }
       const v = VIEWS[name]
+      document.querySelector(`#tray .item[data-id="${v.pick}"]`)?.click()
       sky = new GroundedSkybox(tex, DEMO_EYE_HEIGHT, v.radius)
       camera.position.set(...v.cam); controls.target.set(...v.target); controls.maxDistance = v.max; controls.update()
       sky.position.y = DEMO_EYE_HEIGHT - 0.01
