@@ -6,6 +6,7 @@ import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js'
 import {MeshoptDecoder} from 'three/addons/libs/meshopt_decoder.module.js'
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js'
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js'
+import {GroundedSkybox} from 'three/addons/objects/GroundedSkybox.js'
 
 window.THREE = THREE  // 8th Wall's XR8.Threejs module reads window.THREE.
 
@@ -18,7 +19,7 @@ const PLANTS = [
 ]
 const CAMERA_HEIGHT = 1.45  // metres, phone held at chest height. Sets the AR scale.
 const params = new URLSearchParams(location.search)
-const PREVIEW = params.has('preview')
+let PREVIEW = params.has('preview') || params.has('demo')
 
 const $ = (id) => document.getElementById(id)
 const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder)
@@ -379,22 +380,35 @@ function startAR() {
   window.XR8 ? run() : window.addEventListener('xrloaded', run, {once: true})
 }
 
-// ---------- Preview mode (desktop, no camera) ----------
+// ---------- Demo mode (no camera): a real office panorama with a floor ----------
+// Office panorama: Poly Haven "Poly Haven Studio" (CC0), projected onto a ground plane.
+const DEMO_EYE_HEIGHT = 1.6  // metres. Camera height of the panorama; sets the plant scale in the room.
 function startPreview() {
   const canvas = $('camerafeed')
   const renderer = new THREE.WebGLRenderer({canvas, antialias: true, preserveDrawingBuffer: true})
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
   const scene = new THREE.Scene()
   scene.background = new THREE.Color(0xd9ddd6)
-  const camera = new THREE.PerspectiveCamera(60, 1, 0.05, 100)
-  camera.position.set(0, CAMERA_HEIGHT, 3)
+  const camera = new THREE.PerspectiveCamera(62, 1, 0.05, 100)
+  camera.position.set(0.4, DEMO_EYE_HEIGHT, 3.4)
   initScene({scene, camera, renderer})
-  floor.material = new THREE.MeshStandardMaterial({color: 0xb9b2a6, roughness: 0.9})
-  const grid = new THREE.GridHelper(20, 40, 0x999999, 0xaaaaaa)
-  grid.position.y = 0.001
-  scene.add(grid)
+  new THREE.TextureLoader().load('env/office.jpg', (tex) => {
+    tex.mapping = THREE.EquirectangularReflectionMapping
+    tex.colorSpace = THREE.SRGBColorSpace
+    const sky = new GroundedSkybox(tex, DEMO_EYE_HEIGHT, 30)
+    sky.position.y = DEMO_EYE_HEIGHT - 0.01
+    scene.add(sky)
+    scene.environment = tex
+    scene.environmentIntensity = 0.8
+    renderer.toneMapping = THREE.NoToneMapping  // the panorama is already tone-mapped
+    state.demoReady = true
+  })
   const controls = new OrbitControls(camera, canvas)
-  controls.target.set(0, 0.5, 0)
+  controls.target.set(0, 0.7, 0)
+  controls.enablePan = false
+  controls.minDistance = 1.2
+  controls.maxDistance = 7
+  controls.maxPolarAngle = THREE.MathUtils.degToRad(86)
   // Capture phase runs before OrbitControls: no orbiting while a plant is dragged.
   canvas.addEventListener('pointerdown', (e) => { controls.enabled = !plantHitAt(e.clientX, e.clientY) }, true)
   canvas.addEventListener('pointerup', () => { controls.enabled = true })
@@ -417,3 +431,9 @@ $('go').addEventListener('click', () => {
   $('start').classList.add('hidden')
   PREVIEW ? startPreview() : startAR()
 })
+$('demo').addEventListener('click', () => {
+  PREVIEW = true
+  $('start').classList.add('hidden')
+  startPreview()
+})
+if (PREVIEW) $('demo').classList.add('hidden')
