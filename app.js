@@ -55,13 +55,14 @@ const state = {
   world: null,      // {scene, camera, renderer}
   anims: [],
   maxPlace: PREVIEW ? 25 : 12,  // metres; far hits are imprecise
+  surfaceY: 0,      // height of the surface the phone points at (floor or table)
 }
 
 // Table mode: a phone less than 1 m above the surface points at a table, not the floor.
 // A 4.5 m tree on a table is just a pole, so trees become 1:12 models on an asphalt tile.
-const TABLE_MAX_HEIGHT = 1.0
+const TABLE_MAX_HEIGHT = 0.8  // a seated guest holds the phone about 1 m above the floor
 const MINI = 1 / 12
-const onTable = () => params.has('table') || (!PREVIEW && state.world?.camera.position.y < TABLE_MAX_HEIGHT)
+const onTable = () => params.has('table') || (!PREVIEW && state.world?.camera.position.y - state.surfaceY < TABLE_MAX_HEIGHT)
 
 // Soft round textures, drawn once: a dark contact shadow and a cool shade patch.
 function radialTexture(inner, outer) {
@@ -93,7 +94,7 @@ function asphaltTexture() {
   t.colorSpace = THREE.SRGBColorSpace
   return t
 }
-let blobTex, shadeTex, tileTex
+let blobTex, tileTex
 function flatDisc(radius, material, y) {
   const m = new THREE.Mesh(new THREE.CircleGeometry(radius, 48), material)
   m.rotateX(-Math.PI / 2)
@@ -138,8 +139,7 @@ function initScene({scene, camera, renderer}) {
 
   // Placement reticle: a ring on the floor where the centre of the screen points.
   reticle = new THREE.Group()
-  blobTex = radialTexture('rgba(0,0,0,.6)', 'rgba(0,0,0,0)')
-  shadeTex = radialTexture('rgba(110,190,255,.30)', 'rgba(110,190,255,0)')
+  blobTex = radialTexture('rgba(0,0,0,.7)', 'rgba(0,0,0,0)')
   tileTex = asphaltTexture()
   const ring = new THREE.Mesh(new THREE.RingGeometry(0.16, 0.2, 48), new THREE.MeshBasicMaterial({color: 0xffffff, transparent: true, opacity: 0.9}))
   state.reticleRing = ring
@@ -159,16 +159,40 @@ function initScene({scene, camera, renderer}) {
   loadPlant(state.selectedType).catch(() => {})
 }
 
-function floorHitAt(clientX, clientY) {
+const surfacePlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+function floorHitAt(clientX, clientY, y = state.surfaceY) {
   const {camera, renderer} = state.world
   const r = renderer.domElement.getBoundingClientRect()
   ndc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1)
   raycaster.setFromCamera(ndc, camera)
-  const hit = raycaster.intersectObject(floor)[0]
-  if (!hit) return null
+  surfacePlane.constant = -y
+  const point = raycaster.ray.intersectPlane(surfacePlane, new THREE.Vector3())
   // Ignore hits too far away: they are imprecise and place plants out of view.
-  if (hit.distance > state.maxPlace) return null
-  return hit.point
+  if (!point || point.distanceTo(raycaster.ray.origin) > state.maxPlace) return null
+  point.y = y  // exact, no float noise
+  return point
+}
+
+// AR only: the engine's feature points tell how high the surface under the aim ring is.
+// A median over the last hits keeps one stray point (a laptop, a bottle) from moving it.
+const surfaceHits = []
+let surfaceFrame = 0
+function trackSurface() {
+  if (PREVIEW || params.has('flat') || typeof window.XR8?.XrController?.hitTest !== 'function') return
+  if (++surfaceFrame % 6) return
+  let hits
+  try { hits = XR8.XrController.hitTest(0.5, 0.55, ['FEATURE_POINT']) } catch (e) { return }
+  const camY = state.world.camera.position.y
+  const h = (hits || []).filter((x) => x.position && x.position.y < camY - 0.2)[0]
+  if (!h) return
+  surfaceHits.push(h.position.y)
+  if (surfaceHits.length > 7) surfaceHits.shift()
+  if (surfaceHits.length < 5) return
+  const m = [...surfaceHits].sort((a, b) => a - b)[3]
+  if (Math.abs(m - state.surfaceY) > 0.2) {
+    state.surfaceY = m
+    floor.position.y = m  // shadows fall on the surface the phone points at
+  }
 }
 
 function plantHitAt(clientX, clientY) {
@@ -198,7 +222,7 @@ function tick(now) {
   followSun()
   updateReticle()
   if (state.active) {
-    selRing.position.set(state.active.root.position.x, 0.004, state.active.root.position.z)
+    selRing.position.copy(state.active.root.position).y += 0.004
   }
 }
 
@@ -216,7 +240,7 @@ function followSun() {
 
 // How big the next plant is: trees show their shade circle, plants their footprint.
 function scaleFor(type) {
-  return KIND[type] === 'tree' && onTable() ? MINI : 1
+  return onTable() ? MINI : 1
 }
 let reticleKey = ''
 function sizeReticle() {
@@ -227,7 +251,7 @@ function sizeReticle() {
   if (!proto) return
   reticleKey = key
   const k = scaleFor(type)
-  const r = Math.max(0.12, (KIND[type] === 'tree' ? proto.userData.crownR : proto.userData.footR) * k)
+  const r = Math.max(0.04, (KIND[type] === 'tree' ? proto.userData.crownR : proto.userData.footR) * k)
   const ring = state.reticleRing
   ring.geometry.dispose()
   ring.geometry = new THREE.RingGeometry(r - Math.min(0.05, r * 0.2), r, 64)
@@ -235,12 +259,13 @@ function sizeReticle() {
 
 function updateReticle() {
   if (!state.world || !reticle) return
+  trackSurface()
   const r = state.world.renderer.domElement.getBoundingClientRect()
   const p = floorHitAt(r.left + r.width / 2, r.top + r.height * 0.55)
   reticle.visible = !!p && !state.active && !state.shooting
   sizeReticle()
   if (p) {
-    reticle.position.set(p.x, 0, p.z)
+    reticle.position.copy(p)
     if (!state.floorFound) {
       state.floorFound = true
       setHint('Pick a plant below. Tap the floor to plant it.')
@@ -269,14 +294,14 @@ async function placeAt(point) {
   root.add(body)
   const {crownR, footR} = proto.userData
   const lift = (state.placed.length % 10) * 0.0006  // overlapping discs must not flicker
-  root.add(noRaycast(flatDisc(Math.max(0.08, footR * k * 0.75), new THREE.MeshBasicMaterial({map: blobTex, transparent: true, depthWrite: false}), 0.004 + lift)))
-  if (isTree) root.add(noRaycast(flatDisc(crownR * k * 1.1, new THREE.MeshBasicMaterial({map: shadeTex, transparent: true, depthWrite: false}), 0.003 + lift)))
-  if (mini) {
-    const tile = flatDisc(Math.max(0.16, crownR * k * 1.5), new THREE.MeshStandardMaterial({map: tileTex, roughness: 0.95}), 0.002 + lift)
+  const blobR = isTree ? 0.35 * k : footR * k * 0.6
+  root.add(noRaycast(flatDisc(Math.max(0.02, blobR), new THREE.MeshBasicMaterial({map: blobTex, transparent: true, depthWrite: false}), 0.004 + lift)))
+  if (mini && isTree) {
+    const tile = flatDisc(Math.max(0.12, crownR * k * 1.25), new THREE.MeshStandardMaterial({map: tileTex, roughness: 0.95}), 0.002 + lift)
     tile.receiveShadow = true
     root.add(tile)
   }
-  root.position.set(point.x, 0, point.z)
+  root.position.copy(point)
   // Face the plant's front to the viewer, with a little random turn so groups look natural.
   const cam = state.world.camera.position
   root.rotation.y = Math.atan2(cam.x - point.x, cam.z - point.z) + (Math.random() - 0.5) * 0.6
@@ -289,7 +314,7 @@ async function placeAt(point) {
   updateCount()
   if (mini && !state.miniHinted) {
     state.miniHinted = true
-    setHint('Table spotted: trees show as 1:12 models. Point at the floor for real size.', false, 5000)
+    setHint('Table spotted: you get 1:12 models here. Point at the floor for real size.', false, 5000)
   } else if (state.placed.length === 1) setHint('Nice. Drag to move it. Tap it to rotate or remove.', false, 3500)
   else if (state.placed.length === 3) setHint('Looks good! Tap the camera to keep your green plan.', false, 4000)
   else hideHint()
@@ -355,7 +380,7 @@ function bindPointer(canvas) {
     const plant = plantHitAt(e.clientX, e.clientY)
     let offset = null
     if (plant) {
-      const p = floorHitAt(e.clientX, e.clientY)
+      const p = floorHitAt(e.clientX, e.clientY, plant.root.position.y)
       if (p) offset = new THREE.Vector3().subVectors(plant.root.position, p).setY(0)
     }
     down = {x: e.clientX, y: e.clientY, plant, moved: false, offset}
@@ -365,8 +390,8 @@ function bindPointer(canvas) {
     if (!down || !e.isPrimary) return
     if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 8) down.moved = true
     if (down.moved && down.plant && down.offset) {
-      const p = floorHitAt(e.clientX, e.clientY)
-      if (p) down.plant.root.position.set(p.x + down.offset.x, 0, p.z + down.offset.z)
+      const p = floorHitAt(e.clientX, e.clientY, down.plant.root.position.y)
+      if (p) down.plant.root.position.set(p.x + down.offset.x, p.y, p.z + down.offset.z)
     }
   })
   const end = (e) => {
@@ -541,7 +566,7 @@ function matchRoomLight(exposure) {
 }
 
 function startAR() {
-  if (params.has('debug')) setInterval(() => { if (state.world) setHint(`camera ${state.world.camera.position.y.toFixed(2)} m above surface · table ${onTable()}`) }, 500)
+  if (params.has('debug')) setInterval(() => { if (state.world) setHint(`camera y ${state.world.camera.position.y.toFixed(2)} · surface y ${state.surfaceY.toFixed(2)} · table ${onTable()}`) }, 500)
   const run = () => {
     // Absolute scale: the engine measures real metres, so plants keep their true size
     // on a floor and on a table. ?scale=responsive switches back to the guessed scale.
