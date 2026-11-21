@@ -153,7 +153,7 @@ function updateReticle() {
   if (!state.world || !reticle) return
   const r = state.world.renderer.domElement.getBoundingClientRect()
   const p = floorHitAt(r.left + r.width / 2, r.top + r.height * 0.55)
-  reticle.visible = !!p && !state.active
+  reticle.visible = !!p && !state.active && !state.shooting
   if (p) {
     reticle.position.set(p.x, 0, p.z)
     if (!state.floorFound) {
@@ -334,7 +334,7 @@ let lastPhotoBlob = null
 async function takePhoto() {
   const wasActive = state.active
   select(null)
-  reticle.visible = false
+  reticle.visible = false; state.shooting = true
   const flash = $('flash')
   flash.style.opacity = '0.9'
   setTimeout(() => { flash.style.opacity = '0' }, 120)
@@ -365,6 +365,7 @@ async function takePhoto() {
   } catch (e) {
     setHint('Photo failed. Try again.', true, 2500)
   }
+  state.shooting = false
   if (wasActive) select(wasActive)
 }
 
