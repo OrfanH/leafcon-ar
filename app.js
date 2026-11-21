@@ -37,6 +37,10 @@ const loadPlant = (id) => {
       // Crown footprint (circle over the mean of width and depth): the shade at midday.
       const s = new THREE.Box3().setFromObject(g.scene).getSize(new THREE.Vector3())
       g.scene.userData.shadeM2 = Math.PI * Math.pow((s.x + s.z) / 4, 2)
+      g.scene.userData.crownR = (s.x + s.z) / 4
+      g.scene.userData.footR = Math.max(s.x, s.z) / 2
+      state.protos = state.protos || {}
+      state.protos[id] = g.scene
       return g.scene
     }).catch((e) => { cache.delete(id); throw e }))
   }
@@ -50,7 +54,53 @@ const state = {
   floorFound: false,
   world: null,      // {scene, camera, renderer}
   anims: [],
+  maxPlace: PREVIEW ? 25 : 12,  // metres; far hits are imprecise
 }
+
+// Table mode: a phone less than 1 m above the surface points at a table, not the floor.
+// A 4.5 m tree on a table is just a pole, so trees become 1:12 models on an asphalt tile.
+const TABLE_MAX_HEIGHT = 1.0
+const MINI = 1 / 12
+const onTable = () => params.has('table') || (!PREVIEW && state.world?.camera.position.y < TABLE_MAX_HEIGHT)
+
+// Soft round textures, drawn once: a dark contact shadow and a cool shade patch.
+function radialTexture(inner, outer) {
+  const c = document.createElement('canvas')
+  c.width = c.height = 128
+  const g = c.getContext('2d')
+  const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64)
+  grad.addColorStop(0, inner); grad.addColorStop(0.55, inner); grad.addColorStop(1, outer)
+  g.fillStyle = grad
+  g.fillRect(0, 0, 128, 128)
+  return new THREE.CanvasTexture(c)
+}
+// Asphalt tile with parking lines and a scale label, for 1:12 trees.
+function asphaltTexture() {
+  const c = document.createElement('canvas')
+  c.width = c.height = 256
+  const g = c.getContext('2d')
+  g.fillStyle = '#5b5d5c'
+  g.beginPath(); g.arc(128, 128, 126, 0, Math.PI * 2); g.fill()
+  for (let i = 0; i < 1400; i++) {
+    g.fillStyle = `rgba(${Math.random() < 0.5 ? '255,255,255' : '0,0,0'},${Math.random() * 0.12})`
+    g.fillRect(Math.random() * 256, Math.random() * 256, 2, 2)
+  }
+  g.strokeStyle = 'rgba(255,255,255,.85)'; g.lineWidth = 5
+  for (const x of [52, 204]) { g.beginPath(); g.moveTo(x, 40); g.lineTo(x, 150); g.stroke() }
+  g.fillStyle = '#ffffff'; g.font = '700 30px "IBM Plex Mono", monospace'; g.textAlign = 'center'
+  g.fillText('1:12', 128, 222)
+  const t = new THREE.CanvasTexture(c)
+  t.colorSpace = THREE.SRGBColorSpace
+  return t
+}
+let blobTex, shadeTex, tileTex
+function flatDisc(radius, material, y) {
+  const m = new THREE.Mesh(new THREE.CircleGeometry(radius, 48), material)
+  m.rotateX(-Math.PI / 2)
+  m.position.y = y
+  return m
+}
+const noRaycast = (m) => { m.raycast = () => {}; return m }
 
 // ---------- Scene ----------
 let floor, reticle, selRing
@@ -70,24 +120,29 @@ function initScene({scene, camera, renderer}) {
   const sun = new THREE.DirectionalLight(0xffffff, 1.6)
   sun.position.set(1.5, 4, 2)
   sun.castShadow = true
-  sun.shadow.mapSize.set(1024, 1024)
-  sun.shadow.camera.left = -4; sun.shadow.camera.right = 4
-  sun.shadow.camera.top = 4; sun.shadow.camera.bottom = -4
-  sun.shadow.camera.near = 0.5; sun.shadow.camera.far = 12
+  sun.shadow.mapSize.set(2048, 2048)
+  sun.shadow.camera.left = -10; sun.shadow.camera.right = 10
+  sun.shadow.camera.top = 10; sun.shadow.camera.bottom = -10
+  sun.shadow.camera.near = 0.5; sun.shadow.camera.far = 40
   sun.shadow.bias = -0.0005
   sun.shadow.radius = 4
   scene.add(sun, sun.target)
   state.sun = sun
+  state.sunDir = new THREE.Vector3(0.3, 1, 0.4).normalize()  // nearly overhead, like ceiling light
 
   // Invisible floor that only shows shadows. Used for tap raycasts.
-  floor = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.ShadowMaterial({opacity: 0.32}))
+  floor = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.ShadowMaterial({opacity: 0.4}))
   floor.rotateX(-Math.PI / 2)
   floor.receiveShadow = true
   scene.add(floor)
 
   // Placement reticle: a ring on the floor where the centre of the screen points.
   reticle = new THREE.Group()
+  blobTex = radialTexture('rgba(0,0,0,.6)', 'rgba(0,0,0,0)')
+  shadeTex = radialTexture('rgba(110,190,255,.30)', 'rgba(110,190,255,0)')
+  tileTex = asphaltTexture()
   const ring = new THREE.Mesh(new THREE.RingGeometry(0.16, 0.2, 48), new THREE.MeshBasicMaterial({color: 0xffffff, transparent: true, opacity: 0.9}))
+  state.reticleRing = ring
   const dot = new THREE.Mesh(new THREE.CircleGeometry(0.03, 24), new THREE.MeshBasicMaterial({color: 0x2F7D4F}))
   ring.rotateX(-Math.PI / 2); dot.rotateX(-Math.PI / 2)
   ring.position.y = dot.position.y = 0.003
@@ -112,7 +167,7 @@ function floorHitAt(clientX, clientY) {
   const hit = raycaster.intersectObject(floor)[0]
   if (!hit) return null
   // Ignore hits too far away: they are imprecise and place plants out of view.
-  if (hit.distance > (PREVIEW ? 25 : 12)) return null
+  if (hit.distance > state.maxPlace) return null
   return hit.point
 }
 
@@ -140,10 +195,42 @@ function tick(now) {
     else if (a.prop === 'rotY') a.obj.rotation.y = a.from + (a.to - a.from) * (1 - Math.pow(1 - t, 3))
     return t < 1
   })
+  followSun()
   updateReticle()
   if (state.active) {
     selRing.position.set(state.active.root.position.x, 0.004, state.active.root.position.z)
   }
+}
+
+const _fwd = new THREE.Vector3()
+function followSun() {
+  const {sun, sunDir, world} = state
+  if (!sun || !world) return
+  // Centre the shadow box a few metres in front of the camera, on the floor.
+  world.camera.getWorldDirection(_fwd).setY(0)
+  if (_fwd.lengthSq() < 1e-6) _fwd.set(0, 0, -1)
+  _fwd.normalize().multiplyScalar(4).add(world.camera.position).setY(0)
+  sun.target.position.copy(_fwd)
+  sun.position.copy(_fwd).addScaledVector(sunDir, 15)
+}
+
+// How big the next plant is: trees show their shade circle, plants their footprint.
+function scaleFor(type) {
+  return KIND[type] === 'tree' && onTable() ? MINI : 1
+}
+let reticleKey = ''
+function sizeReticle() {
+  const type = state.selectedType
+  const key = type + '|' + scaleFor(type)
+  if (key === reticleKey) return
+  const proto = state.protos?.[type]
+  if (!proto) return
+  reticleKey = key
+  const k = scaleFor(type)
+  const r = Math.max(0.12, (KIND[type] === 'tree' ? proto.userData.crownR : proto.userData.footR) * k)
+  const ring = state.reticleRing
+  ring.geometry.dispose()
+  ring.geometry = new THREE.RingGeometry(r - Math.min(0.05, r * 0.2), r, 64)
 }
 
 function updateReticle() {
@@ -151,6 +238,7 @@ function updateReticle() {
   const r = state.world.renderer.domElement.getBoundingClientRect()
   const p = floorHitAt(r.left + r.width / 2, r.top + r.height * 0.55)
   reticle.visible = !!p && !state.active && !state.shooting
+  sizeReticle()
   if (p) {
     reticle.position.set(p.x, 0, p.z)
     if (!state.floorFound) {
@@ -169,20 +257,40 @@ async function placeAt(point) {
     setHint('Could not load the plant. Check your connection and tap again.', true)
     return
   }
+  const isTree = KIND[type] === 'tree'
+  const mini = scaleFor(type) !== 1
+  // Trees vary a little in size so a group does not look copy-pasted.
+  const vary = isTree ? 0.9 + Math.random() * 0.2 : 1
+  const k = scaleFor(type) * vary
   const root = new THREE.Group()
-  root.add(proto.clone(true))
+  const body = proto.clone(true)
+  body.scale.setScalar(k)
+  body.rotation.y = Math.random() * Math.PI * 2 * (isTree ? 1 : 0)
+  root.add(body)
+  const {crownR, footR} = proto.userData
+  const lift = (state.placed.length % 10) * 0.0006  // overlapping discs must not flicker
+  root.add(noRaycast(flatDisc(Math.max(0.08, footR * k * 0.75), new THREE.MeshBasicMaterial({map: blobTex, transparent: true, depthWrite: false}), 0.004 + lift)))
+  if (isTree) root.add(noRaycast(flatDisc(crownR * k * 1.1, new THREE.MeshBasicMaterial({map: shadeTex, transparent: true, depthWrite: false}), 0.003 + lift)))
+  if (mini) {
+    const tile = flatDisc(Math.max(0.16, crownR * k * 1.5), new THREE.MeshStandardMaterial({map: tileTex, roughness: 0.95}), 0.002 + lift)
+    tile.receiveShadow = true
+    root.add(tile)
+  }
   root.position.set(point.x, 0, point.z)
   // Face the plant's front to the viewer, with a little random turn so groups look natural.
   const cam = state.world.camera.position
   root.rotation.y = Math.atan2(cam.x - point.x, cam.z - point.z) + (Math.random() - 0.5) * 0.6
   root.scale.setScalar(0.01)
-  const plant = {root, type, shadeM2: proto.userData.shadeM2}
+  const plant = {root, type, shadeM2: proto.userData.shadeM2 * vary * vary}
   root.userData.plant = plant
   state.world.scene.add(root)
   state.placed.push(plant)
   animate(root, 0.01, 1, 650)
   updateCount()
-  if (state.placed.length === 1) setHint('Nice. Drag to move it. Tap it to rotate or remove.', false, 3500)
+  if (mini && !state.miniHinted) {
+    state.miniHinted = true
+    setHint('Table spotted: trees show as 1:12 models. Point at the floor for real size.', false, 5000)
+  } else if (state.placed.length === 1) setHint('Nice. Drag to move it. Tap it to rotate or remove.', false, 3500)
   else if (state.placed.length === 3) setHint('Looks good! Tap the camera to keep your green plan.', false, 4000)
   else hideHint()
   $('photo').classList.toggle('pulse', state.placed.length >= 3)
@@ -415,15 +523,29 @@ function leafconModule() {
       $('ui').classList.remove('hidden')
       setHint('Move your phone slowly to find the floor.')
     },
-    onUpdate: () => tick(performance.now()),
+    onUpdate: ({processCpuResult}) => {
+      const light = processCpuResult?.reality?.lighting
+      if (light && typeof light.exposure === 'number') matchRoomLight(light.exposure)
+      tick(performance.now())
+    },
   }
 }
 
+// exposure: -1 (dark room) .. 1 (bright). Plants follow it so they are not brighter than the room.
+let lightLevel = 1
+function matchRoomLight(exposure) {
+  const target = THREE.MathUtils.clamp(1 + exposure, 0.35, 1.4)
+  lightLevel += (target - lightLevel) * 0.05
+  state.world.scene.environmentIntensity = 0.9 * lightLevel
+  state.sun.intensity = 1.6 * lightLevel
+}
+
 function startAR() {
+  if (params.has('debug')) setInterval(() => { if (state.world) setHint(`camera ${state.world.camera.position.y.toFixed(2)} m above surface · table ${onTable()}`) }, 500)
   const run = () => {
     // Absolute scale: the engine measures real metres, so plants keep their true size
     // on a floor and on a table. ?scale=responsive switches back to the guessed scale.
-    XR8.XrController.configure({scale: params.get('scale') === 'responsive' ? 'responsive' : 'absolute'})
+    XR8.XrController.configure({scale: params.get('scale') === 'responsive' ? 'responsive' : 'absolute', enableLighting: true})
     XR8.addCameraPipelineModules([
       XR8.GlTextureRenderer.pipelineModule(),
       XR8.Threejs.pipelineModule(),
@@ -457,8 +579,9 @@ function startPreview() {
   const controls = new OrbitControls(camera, canvas)
   // The panorama looks right only near its own camera spot. A room needs a closer view.
   const VIEWS = {
-    grounds: {pick: 'youngtree', radius: 60, cam: [0.8, DEMO_EYE_HEIGHT, 6], target: [0, 1.4, -1], max: 14},
-    office: {pick: 'ficus', radius: 10, cam: [0.3, DEMO_EYE_HEIGHT, 2.6], target: [0, 1.1, -1], max: 4.5},
+    // sun: direction of the sun in the panorama (measured from env/grounds.jpg, raised a little).
+    grounds: {pick: 'youngtree', sun: [0.711, 0.469, 0.524], shadow: 0.55, reach: 25, radius: 60, cam: [0.8, DEMO_EYE_HEIGHT, 6], target: [0, 1.4, -1], max: 14},
+    office: {pick: 'ficus', sun: [0.3, 1, 0.4], shadow: 0.4, reach: 7, radius: 10, cam: [0.3, DEMO_EYE_HEIGHT, 2.6], target: [0, 1.1, -1], max: 4.5},
   }
   const texLoader = new THREE.TextureLoader()
   const loadScene = (name) => {
@@ -470,6 +593,9 @@ function startPreview() {
       const v = VIEWS[name]
       document.querySelector(`#tray .item[data-id="${v.pick}"]`)?.click()
       sky = new GroundedSkybox(tex, DEMO_EYE_HEIGHT, v.radius)
+      state.sunDir.set(...v.sun).normalize()
+      floor.material.opacity = v.shadow
+      state.maxPlace = v.reach
       camera.position.set(...v.cam); controls.target.set(...v.target); controls.maxDistance = v.max; controls.update()
       sky.position.y = DEMO_EYE_HEIGHT - 0.01
       scene.add(sky)
@@ -499,7 +625,7 @@ function startPreview() {
   resize()
   renderer.setAnimationLoop((t) => { controls.update(); tick(performance.now()); renderer.render(scene, camera) })
   $('ui').classList.remove('hidden')
-  window.__leafcon = {state, placeAt, THREE}  // for automated tests
+  window.__leafcon = {state, placeAt, THREE, controls}  // for automated tests
 }
 
 buildTray()
