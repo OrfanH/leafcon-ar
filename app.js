@@ -10,7 +10,7 @@ import {GroundedSkybox} from 'three/addons/objects/GroundedSkybox.js'
 
 window.THREE = THREE  // 8th Wall's XR8.Threejs module reads window.THREE.
 
-// kind 'tree' = LeafCon tree package (priced). kind 'plant' = office green, shown without a price.
+// kind 'tree' = outdoor tree (counts towards shade). kind 'plant' = office green.
 const PLANTS = [
   {id: 'youngtree', kind: 'tree', name: 'City tree', size: '4.5 m'},
   {id: 'islandtree', kind: 'tree', name: 'Multi-stem', size: '3.4 m'},
@@ -21,9 +21,6 @@ const PLANTS = [
   {id: 'raisedbed', kind: 'plant', name: 'Raised bed', size: '1 m'},
 ]
 const KIND = Object.fromEntries(PLANTS.map((p) => [p.id, p.kind]))
-// LeafCon list prices, net (Lean Canvas, 21.11.2026).
-const PRICE = {tree: 990, carePerSite: 99, carePerTree: 29}
-const eur = (n) => '€' + n.toLocaleString('en-US')
 const CAMERA_HEIGHT = 1.45  // metres, phone held at chest height. Sets the AR scale.
 const params = new URLSearchParams(location.search)
 let PREVIEW = params.has('preview') || params.has('demo')
@@ -215,25 +212,20 @@ function summary() {
   const trees = state.placed.filter((p) => KIND[p.type] === 'tree')
   const plants = state.placed.length - trees.length
   const shade = Math.round(trees.reduce((a, p) => a + (p.shadeM2 || 0), 0))
-  const once = trees.length * PRICE.tree
-  const care = trees.length ? PRICE.carePerSite + trees.length * PRICE.carePerTree : 0
   const parts = []
   if (trees.length) parts.push(trees.length === 1 ? '1 tree' : `${trees.length} trees`)
   if (plants) parts.push(plants === 1 ? '1 plant' : `${plants} plants`)
   return {
-    trees: trees.length, plants, shade, once, care,
+    trees: trees.length, plants, shade,
     title: parts.join(' + ') || 'Nothing planted yet',
-    money: trees.length ? `${eur(once)} once · care ${eur(care)}/month` : '',
-    total: trees.length ? `24-month total ${eur(once + 24 * care)}` : '',
     shadeText: trees.length ? `≈ ${shade} m² of shade` : '',
-    green: plants ? 'Office green: quoted on site' : '',
   }
 }
 function updateCount() {
   const s = summary()
   $('count').textContent = s.title
-  $('money').textContent = s.money ? `${s.money} · ${s.shadeText}` : s.green
-  $('money').classList.toggle('hidden', !s.money && !s.green)
+  $('shade').textContent = s.shadeText
+  $('shade').classList.toggle('hidden', !s.shadeText)
 }
 
 let hintTimer
@@ -294,7 +286,7 @@ function buildTray() {
     if (p.kind !== lastKind) {
       const label = document.createElement('span')
       label.className = 'tray-label'
-      label.textContent = p.kind === 'tree' ? 'Trees · €990' : 'Office green'
+      label.textContent = p.kind === 'tree' ? 'Trees' : 'Office green'
       tray.appendChild(label)
       lastKind = p.kind
     }
@@ -357,10 +349,8 @@ async function takePhoto() {
     $('shot').src = dataUrl
     const s = summary()
     $('planTitle').textContent = s.title
-    $('planMoney').textContent = [s.money, s.total].filter(Boolean).join('\n')
-    $('planShade').textContent = [s.shadeText, s.green].filter(Boolean).join('\n')
-    $('planMoney').classList.toggle('hidden', !s.money)
-    $('planShade').classList.toggle('hidden', !$('planShade').textContent)
+    $('planShade').textContent = s.shadeText
+    $('planShade').classList.toggle('hidden', !s.shadeText)
     $('sheet').classList.remove('hidden')
   } catch (e) {
     setHint('Photo failed. Try again.', true, 2500)
@@ -369,11 +359,11 @@ async function takePhoto() {
   if (wasActive) select(wasActive)
 }
 
-// Burns a LeafCon footer into the photo: logo, claim, and the plan with its price.
+// Burns a LeafCon footer into the photo: logo, claim, what was planted and the shade.
 function stampBrand(ctx, canvas) {
   const s = canvas.width / 400
   const sum = summary()
-  const lines = sum.money ? [sum.money, `${sum.total} · ${sum.shadeText}`] : sum.green ? [sum.green] : []
+  const lines = sum.shadeText ? [sum.shadeText] : []
   const h = (62 + lines.length * 21) * s
   const y = canvas.height - h
   ctx.save()

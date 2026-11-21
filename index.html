@@ -91,7 +91,7 @@
   .tray-label { flex: none; writing-mode: vertical-rl; transform: rotate(180deg); align-self: center;
     font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
     color: #fff; background: rgba(23,34,27,.7); border-radius: 8px; padding: 8px 3px; }
-  #money { display: block; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11px; color: var(--green-dark); margin-top: 2px; }
+  #shade { display: block; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11px; color: var(--green-dark); margin-top: 2px; }
   #scenes { position: absolute; top: calc(60px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
     display: flex; gap: 4px; background: var(--glass); border-radius: 999px; padding: 4px; box-shadow: 0 2px 10px rgba(0,0,0,.15); }
   #scenes button { border: 0; background: transparent; border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 600; }
@@ -147,7 +147,7 @@
   <ol class="steps">
     <li><b>1</b>Point your phone at the floor or table.</li>
     <li><b>2</b>Pick a tree. Tap to plant it at real size.</li>
-    <li><b>3</b>See the price live. Keep a photo of your plan.</li>
+    <li><b>3</b>Snap a photo of your new green space.</li>
   </ol>
   <button class="cta" id="go">Start AR</button>
   <button class="link" id="demo">No camera? Try the 3D demo</button>
@@ -178,7 +178,7 @@
       <button id="done">Done</button>
     </div>
     <div class="topbar" style="position:static;margin:0 12px 8px;">
-      <span class="pill" style="border-radius:14px"><span id="count">Nothing planted yet</span><span id="money" class="hidden"></span></span>
+      <span class="pill" style="border-radius:14px"><span id="count">Nothing planted yet</span><span id="shade" class="hidden"></span></span>
     </div>
     <div id="tray" role="group" aria-label="Plants"></div>
   </div>
@@ -188,11 +188,9 @@
   <div class="card">
     <img id="shot" alt="Photo of your green plan">
     <h2 id="planTitle"></h2>
-    <p class="plan" id="planMoney"></p>
     <p class="plan" id="planShade"></p>
     <p class="why">Trees cool 2–4× more than plain lawn (WSL). Above 30 °C, every degree costs about 3 % productivity (Allianz Trade).</p>
-    <p class="meet">Want this on your grounds? <b>Find the LeafCon team in the room</b>. We plant it with your staff.</p>
-    <p class="fine">Net list prices: tree package €990 per tree. Care Plus €99 per site + €29 per tree per month, 24 months.</p>
+    <p class="meet">Like it? <b>Show this photo to the LeafCon team in the room.</b></p>
     <div class="row">
       <button class="ghost" id="closeSheet">Back</button>
       <button class="cta" id="share">Save / share</button>
