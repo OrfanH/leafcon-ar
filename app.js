@@ -273,15 +273,19 @@ function coolEffect(root, crownR, height, delay) {
   const MS = 3400
   state.waveUntil = t0 + MS * 0.6
   // The patch under the crown first glows hot (sunny asphalt), then turns cool and stays.
-  const patch = noRaycast(flatDisc(crownR * 1.15, new THREE.MeshBasicMaterial({map: coolTex, color: HOT, transparent: true, opacity: 0, depthWrite: false}), 0.003))
+  const patch = noRaycast(flatDisc(crownR, new THREE.MeshBasicMaterial({map: coolTex, color: HOT, transparent: true, opacity: 0, depthWrite: false}), 0.003))
+  const oval = new THREE.Group()
+  oval.add(patch)
   const d = state.sunDir
   if (d && d.y > 0.1) {
-    const off = new THREE.Vector3(-d.x, 0, -d.z).multiplyScalar(height * 0.3 / d.y)
-    if (off.length() > crownR * 0.8) off.setLength(crownR * 0.8)
+    const off = new THREE.Vector3(-d.x, 0, -d.z).multiplyScalar(height * 0.5 / d.y)
+    if (off.length() > crownR) off.setLength(crownR)
     off.applyAxisAngle(new THREE.Vector3(0, 1, 0), -root.rotation.y)
-    patch.position.x = off.x; patch.position.z = off.z
+    oval.position.set(off.x, 0, off.z)
+    oval.rotation.y = Math.atan2(-off.z, off.x)  // local x points into the shadow
+    oval.scale.x = 1 + off.length() / crownR * 0.6
   }
-  root.add(patch)
+  root.add(oval)
   patch.scale.setScalar(0.01)
   const label = labelSprite()
   label.material.opacity = 0
@@ -291,10 +295,12 @@ function coolEffect(root, crownR, height, delay) {
   const ramp = (a, b, t) => Math.min(1, Math.max(0, (t - a) / (b - a)))
   state.anims.push({t0, ms: MS, step: (t) => {
     const grow = ramp(0, 0.15, t), cool = ramp(0.22, 0.6, t)
-    const k = cool * cool * (3 - 2 * cool)  // smooth step
+    const k0 = cool * cool * (3 - 2 * cool)  // smooth step
+    const k = k0 * k0 * (3 - 2 * k0)  // twice: less time in the green middle
     patch.scale.setScalar(Math.max(0.01, grow) / Math.max(0.01, root.scale.x))
     patch.material.color.copy(HOT).lerpHSL(COOL, k)  // via the hue wheel: orange, green, blue
-    patch.material.opacity = grow * (0.85 - 0.2 * k)
+    const haze = (1 - k) * 0.12 * Math.sin(t * 90)
+    patch.material.opacity = grow * (0.85 - 0.2 * k + haze)
     // Label: 70 °C asphalt in the sun (start screen), counts down to 45 °C in the shade, then the claim.
     const temp = Math.round(70 - 25 * k)
     const bg = '#' + _bg.copy(HOT_BG).lerpHSL(COOL_BG, k).getHexString()
@@ -370,7 +376,9 @@ function updateReticle() {
   trackSurface()
   const r = state.world.renderer.domElement.getBoundingClientRect()
   const p = floorHitAt(r.left + r.width / 2, r.top + r.height * 0.55)
-  reticle.visible = !!p && !state.active && !state.shooting && !(performance.now() < state.waveUntil)
+  const cam = state.world.camera, hold = state.aimHold
+  if (hold && (cam.position.distanceTo(hold.p) > 0.3 || cam.quaternion.angleTo(hold.q) > 0.35)) state.aimHold = null
+  reticle.visible = !!p && !state.active && !state.shooting && !state.aimHold && !(performance.now() < state.waveUntil)
   sizeReticle()
   if (p) {
     reticle.position.copy(p)
@@ -439,6 +447,7 @@ async function placeAt(point) {
   root.userData.plant = plant
   state.world.scene.add(root)
   state.placed.push(plant)
+  state.aimHold = {p: state.world.camera.position.clone(), q: state.world.camera.quaternion.clone()}
   animate(root, 0.01, 1, 650)
   if (isTree) coolEffect(root, crownR * k, proto.userData.height * k + (mini ? TILE_H : 0), 450)
   updateCount()
@@ -561,6 +570,7 @@ function buildTray() {
     b.innerHTML = `<img src="thumbs/${p.id}.webp" alt=""><span class="n">${p.name}</span><span class="s">${p.size}</span>`
     b.addEventListener('click', () => {
       state.selectedType = p.id
+      state.aimHold = null
       tray.querySelectorAll('.item').forEach((x) => x.setAttribute('aria-pressed', String(x === b)))
       loadPlant(p.id).catch(() => {})
       select(null)
@@ -645,9 +655,14 @@ function stampBrand(ctx, canvas) {
   ctx.fillText('The air-con made of leaves', 196 * s, y + 34 * s, canvas.width - 212 * s)
   let ly = y + 66 * s
   if (big) {
-    ctx.fillStyle = '#9FE0FF'
     ctx.font = `700 ${27 * s}px "Instrument Sans", system-ui, sans-serif`
-    ctx.fillText(big, 16 * s, ly + 4 * s, canvas.width - 32 * s)
+    let x = 16 * s
+    for (const [txt, col] of [['70 °C', '#FF8A4C'], [' → ', '#FFFFFF'], ['45 °C', '#5FE3C8'], [' ground in the shade', '#FFFFFF']]) {
+      if (txt.startsWith(' ground')) ctx.font = `600 ${17 * s}px "Instrument Sans", system-ui, sans-serif`
+      ctx.fillStyle = col
+      ctx.fillText(txt, x, ly + 4 * s)
+      x += ctx.measureText(txt).width
+    }
     ly += 30 * s
   }
   ctx.fillStyle = '#FFFFFF'
