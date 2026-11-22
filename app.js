@@ -33,6 +33,10 @@ const loadPlant = (id) => {
     cache.set(id, loader.loadAsync(`models/${id}.glb`).then((g) => {
       g.scene.traverse((o) => {
         if (o.isMesh) { o.castShadow = true; o.receiveShadow = true }
+        // Tree leaves: cut-out instead of blended (denser, no sorting glitches), a touch greener.
+        for (const m of o.isMesh ? [o.material].flat() : []) {
+          if (/leaves$/.test(m.name)) { m.transparent = false; m.alphaTest = 0.35; m.depthWrite = true; m.color.setRGB(0.86, 1, 0.8) }
+        }
       })
       g.scene.updateMatrixWorld(true)
       const box = new THREE.Box3().setFromObject(g.scene)
@@ -123,6 +127,8 @@ function asphaltTexture() {
   return t
 }
 let blobTex, tileTex, coolTex
+const HOT = new THREE.Color(0xff6a2b), COOL = new THREE.Color(0x8fd3ff)
+const HOT_BG = new THREE.Color(0xc4542a), COOL_BG = new THREE.Color(0x17543c), _bg = new THREE.Color()
 function flatDisc(radius, material, y) {
   const m = new THREE.Mesh(new THREE.CircleGeometry(radius, 48), material)
   m.rotateX(-Math.PI / 2)
@@ -236,50 +242,58 @@ function plantHitAt(clientX, clientY) {
   return o ? o.userData.plant : null
 }
 
-// Shows the cooling: a cool wave runs out to the crown edge, a short label floats up.
-function labelSprite(text) {
+// Shows the cooling: the ground under the crown glows hot, then turns cool; a label counts down.
+function labelSprite() {
   const c = document.createElement('canvas')
   c.width = 512; c.height = 112
   const g = c.getContext('2d')
-  g.fillStyle = 'rgba(23,60,40,.88)'
-  g.beginPath(); g.roundRect(4, 4, 504, 104, 52); g.fill()
-  g.fillStyle = '#ffffff'; g.font = '600 40px "Instrument Sans", system-ui, sans-serif'
-  g.textAlign = 'center'; g.textBaseline = 'middle'
-  g.fillText(text, 256, 58)
   const t = new THREE.CanvasTexture(c)
+  let last = ''
+  const draw = (text, bg) => {
+    if (text + bg === last) return
+    last = text + bg
+    g.clearRect(0, 0, 512, 112)
+    g.fillStyle = bg
+    g.beginPath(); g.roundRect(4, 4, 504, 104, 52); g.fill()
+    g.fillStyle = '#ffffff'; g.font = '700 42px "Instrument Sans", system-ui, sans-serif'
+    g.textAlign = 'center'; g.textBaseline = 'middle'
+    g.fillText(text, 256, 58)
+    t.needsUpdate = true
+  }
   t.colorSpace = THREE.SRGBColorSpace
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({map: t, transparent: true, depthTest: false, sizeAttenuation: false}))
   sp.scale.set(0.3, 0.066, 1)
   sp.renderOrder = 10
+  sp.userData.draw = draw
   return sp
 }
 function coolEffect(root, crownR, height, delay) {
   const scene = state.world.scene
-  const wave = new THREE.Mesh(new THREE.RingGeometry(0.86, 1, 64), new THREE.MeshBasicMaterial({color: 0x7cc8ff, transparent: true, opacity: 0, depthWrite: false}))
-  wave.rotateX(-Math.PI / 2)
-  wave.position.copy(root.position).y += 0.01
-  scene.add(wave)
   const t0 = performance.now() + delay
-  state.waveUntil = t0 + 1400
-  // The cool patch stays under the tree, so a planted lot shows cool spots.
-  const patch = noRaycast(flatDisc(crownR, new THREE.MeshBasicMaterial({map: coolTex, color: 0x8fd3ff, transparent: true, opacity: 0, depthWrite: false}), 0.003))
+  const MS = 3400
+  state.waveUntil = t0 + MS * 0.6
+  // The patch under the crown first glows hot (sunny asphalt), then turns cool and stays.
+  const patch = noRaycast(flatDisc(crownR, new THREE.MeshBasicMaterial({map: coolTex, color: HOT, transparent: true, opacity: 0, depthWrite: false}), 0.003))
   root.add(patch)
-  patch.scale.setScalar(1 / root.scale.x || 1)
-  state.anims.push({t0, ms: 1400, step: (t) => {
-    patch.scale.setScalar(Math.max(0.01, t) / Math.max(0.01, root.scale.x))
-    patch.material.opacity = 0.75 * Math.min(1, t * 1.5)
-    wave.scale.setScalar(Math.max(0.01, crownR * (1 - Math.pow(1 - t, 3))))
-    wave.material.opacity = t <= 0 ? 0 : 0.7 * (1 - t)
-    if (t >= 1) { scene.remove(wave); wave.geometry.dispose(); wave.material.dispose() }
-  }})
-  const label = labelSprite('Shade: 11–25 °C cooler')
+  patch.scale.setScalar(0.01)
+  const label = labelSprite()
   label.material.opacity = 0
   label.position.copy(root.position).y += height * 1.05
   scene.add(label)
   const y0 = label.position.y
-  state.anims.push({t0, ms: 2600, step: (t) => {
-    label.material.opacity = t <= 0 ? 0 : Math.min(1, t * 6, (1 - t) * 4)
-    label.position.y = y0 + height * 0.12 * t
+  const ramp = (a, b, t) => Math.min(1, Math.max(0, (t - a) / (b - a)))
+  state.anims.push({t0, ms: MS, step: (t) => {
+    const grow = ramp(0, 0.15, t), cool = ramp(0.22, 0.6, t)
+    const k = cool * cool * (3 - 2 * cool)  // smooth step
+    patch.scale.setScalar(Math.max(0.01, grow) / Math.max(0.01, root.scale.x))
+    patch.material.color.copy(HOT).lerpHSL(COOL, k)  // via the hue wheel: orange, green, blue
+    patch.material.opacity = grow * (0.8 - 0.25 * k)
+    // Label: 60 °C in the sun, counts down to 35 °C in the shade, then the claim.
+    const temp = Math.round(60 - 25 * k)
+    const bg = '#' + _bg.copy(HOT_BG).lerpHSL(COOL_BG, k).getHexString()
+    label.userData.draw(t < 0.66 ? `Ground: ${temp} °C` : 'Shade: up to 25 °C cooler', bg)
+    label.material.opacity = t <= 0 ? 0 : Math.min(1, t * 10, (1 - t) * 5)
+    label.position.y = y0 + height * 0.08 * t
     label.visible = !state.shooting
     if (t >= 1) { scene.remove(label); label.material.map.dispose(); label.material.dispose() }
   }})
@@ -605,8 +619,8 @@ async function takePhoto() {
 function stampBrand(ctx, canvas) {
   const s = canvas.width / 400
   const sum = summary()
-  const big = sum.trees ? `${sum.shade} m² of shade · up to 25 °C cooler` : ''
-  const h = (big ? 92 : 62) * s
+  const big = sum.trees ? 'Up to 25 °C cooler ground' : ''
+  const h = (big ? 104 : 66) * s
   const y = canvas.height - h
   ctx.save()
   const grad = ctx.createLinearGradient(0, y - 30 * s, 0, canvas.height)
@@ -617,18 +631,21 @@ function stampBrand(ctx, canvas) {
   ctx.fillRect(0, y - 30 * s, canvas.width, h + 30 * s)
   ctx.textBaseline = 'alphabetic'
   ctx.fillStyle = '#9FD8B2'
-  ctx.font = `700 ${26 * s}px "Bricolage Grotesque", system-ui, sans-serif`
-  ctx.fillText('LeafCon', 16 * s, y + 26 * s)
+  ctx.font = `700 ${32 * s}px "Bricolage Grotesque", system-ui, sans-serif`
+  ctx.fillText('LeafCon', 16 * s, y + 30 * s)
   ctx.fillStyle = '#FFFFFF'
-  ctx.font = `500 ${14 * s}px "Instrument Sans", system-ui, sans-serif`
-  ctx.fillText('The air-con made of leaves', 128 * s, y + 25 * s)
-  ctx.font = `600 ${17 * s}px "Instrument Sans", system-ui, sans-serif`
-  ctx.fillText(`My green plan: ${sum.title}`, 16 * s, y + 51 * s)
+  ctx.font = `500 ${15 * s}px "Instrument Sans", system-ui, sans-serif`
+  ctx.fillText('The air-con made of leaves', 152 * s, y + 28 * s, canvas.width - 168 * s)
+  let ly = y + 56 * s
   if (big) {
     ctx.fillStyle = '#9FE0FF'
-    ctx.font = `700 ${21 * s}px "Instrument Sans", system-ui, sans-serif`
-    ctx.fillText(big, 16 * s, y + 80 * s, canvas.width - 32 * s)
+    ctx.font = `700 ${27 * s}px "Instrument Sans", system-ui, sans-serif`
+    ctx.fillText(big, 16 * s, ly + 4 * s, canvas.width - 32 * s)
+    ly += 30 * s
   }
+  ctx.fillStyle = '#FFFFFF'
+  ctx.font = `600 ${15 * s}px "Instrument Sans", system-ui, sans-serif`
+  ctx.fillText(`My green plan: ${sum.title}` + (sum.trees ? ` · ${sum.shade} m² of shade` : ''), 16 * s, ly, canvas.width - 32 * s)
   ctx.restore()
 }
 
