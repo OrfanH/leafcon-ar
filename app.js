@@ -79,10 +79,18 @@ const state = {
 
 // Table mode: a phone less than 1 m above the surface points at a table, not the floor.
 // A 4.5 m tree on a table is just a pole, so trees become 1:12 models on an asphalt tile.
-const TABLE_MAX_HEIGHT = 0.8  // a seated guest holds the phone about 1 m above the floor
-const MINI = 1 / 12
+// Hysteresis: switch on below 0.95 m, off above 1.05 m, so the mode does not flicker.
+const TABLE_ON = 0.95, TABLE_OFF = 1.05
+const MINI = 1 / 12  // trees on a table
+const DESK = 1 / 4   // pots and planters on a table: desk size
 const TILE_H = 0.01  // metres: the 1:12 asphalt tile is a thin slab
-const onTable = () => params.has('table') || (!PREVIEW && state.world?.camera.position.y - state.surfaceY < TABLE_MAX_HEIGHT)
+function onTable() {
+  if (params.has('table')) return true
+  if (PREVIEW || !state.world) return false
+  const h = state.world.camera.position.y - state.surfaceY
+  if (state.table ? h > TABLE_OFF : h < TABLE_ON) state.table = !state.table
+  return state.table
+}
 
 // Soft round textures, drawn once: a dark contact shadow and a cool shade patch.
 function radialTexture(inner, outer) {
@@ -114,7 +122,7 @@ function asphaltTexture() {
   t.colorSpace = THREE.SRGBColorSpace
   return t
 }
-let blobTex, tileTex
+let blobTex, tileTex, coolTex
 function flatDisc(radius, material, y) {
   const m = new THREE.Mesh(new THREE.CircleGeometry(radius, 48), material)
   m.rotateX(-Math.PI / 2)
@@ -160,6 +168,7 @@ function initScene({scene, camera, renderer}) {
   // Placement reticle: a ring on the floor where the centre of the screen points.
   reticle = new THREE.Group()
   blobTex = radialTexture('rgba(0,0,0,.7)', 'rgba(0,0,0,0)')
+  coolTex = radialTexture('rgba(255,255,255,.55)', 'rgba(255,255,255,0)')
   tileTex = asphaltTexture()
   const ring = new THREE.Mesh(new THREE.RingGeometry(0.16, 0.2, 48), new THREE.MeshBasicMaterial({color: 0xffffff, transparent: true, opacity: 0.9}))
   state.reticleRing = ring
@@ -240,7 +249,7 @@ function labelSprite(text) {
   const t = new THREE.CanvasTexture(c)
   t.colorSpace = THREE.SRGBColorSpace
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({map: t, transparent: true, depthTest: false, sizeAttenuation: false}))
-  sp.scale.set(0.42, 0.092, 1)
+  sp.scale.set(0.3, 0.066, 1)
   sp.renderOrder = 10
   return sp
 }
@@ -251,14 +260,21 @@ function coolEffect(root, crownR, height, delay) {
   wave.position.copy(root.position).y += 0.01
   scene.add(wave)
   const t0 = performance.now() + delay
+  state.waveUntil = t0 + 1400
+  // The cool patch stays under the tree, so a planted lot shows cool spots.
+  const patch = noRaycast(flatDisc(crownR, new THREE.MeshBasicMaterial({map: coolTex, color: 0x8fd3ff, transparent: true, opacity: 0, depthWrite: false}), 0.003))
+  root.add(patch)
+  patch.scale.setScalar(1 / root.scale.x || 1)
   state.anims.push({t0, ms: 1400, step: (t) => {
+    patch.scale.setScalar(Math.max(0.01, t) / Math.max(0.01, root.scale.x))
+    patch.material.opacity = 0.75 * Math.min(1, t * 1.5)
     wave.scale.setScalar(Math.max(0.01, crownR * (1 - Math.pow(1 - t, 3))))
     wave.material.opacity = t <= 0 ? 0 : 0.7 * (1 - t)
     if (t >= 1) { scene.remove(wave); wave.geometry.dispose(); wave.material.dispose() }
   }})
   const label = labelSprite('Shade: 11–25 °C cooler')
   label.material.opacity = 0
-  label.position.copy(root.position).y += height * 0.75
+  label.position.copy(root.position).y += height * 1.05
   scene.add(label)
   const y0 = label.position.y
   state.anims.push({t0, ms: 2600, step: (t) => {
@@ -293,37 +309,25 @@ const _fwd = new THREE.Vector3()
 function followSun() {
   const {sun, sunDir, world} = state
   if (!sun || !world) return
-  let half = 10
+  // The box keeps a fixed size (set in initScene). Changing its size made frames stall
+  // for seconds, so it only moves: to the middle of the placed items, or ahead of the camera.
   if (state.placed.length) {
-    // Fit the shadow box around everything placed: a small box gives sharp shadows.
-    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, h = 0
-    for (const p of state.placed) {
-      const q = p.root.position
-      x0 = Math.min(x0, q.x - p.reach); x1 = Math.max(x1, q.x + p.reach)
-      z0 = Math.min(z0, q.z - p.reach); z1 = Math.max(z1, q.z + p.reach)
-      h = Math.max(h, p.height)
-    }
-    _fwd.set((x0 + x1) / 2, state.placed.at(-1).root.position.y, (z0 + z1) / 2)
-    half = Math.min(15, Math.max(0.5, Math.max(x1 - x0, z1 - z0) / 2 + h * 1.2))
+    let x = 0, z = 0
+    for (const p of state.placed) { x += p.root.position.x; z += p.root.position.z }
+    _fwd.set(x / state.placed.length, state.placed.at(-1).root.position.y, z / state.placed.length)
   } else {
-    // Nothing yet: a box a few metres in front of the camera.
     world.camera.getWorldDirection(_fwd).setY(0)
     if (_fwd.lengthSq() < 1e-6) _fwd.set(0, 0, -1)
     _fwd.normalize().multiplyScalar(4).add(world.camera.position).setY(state.surfaceY)
   }
-  const cam = sun.shadow.camera
-  if (cam.right !== half) {
-    cam.left = cam.bottom = -half; cam.right = cam.top = half
-    cam.far = half * 4 + 20
-    cam.updateProjectionMatrix()
-  }
+  const half = 10
   sun.target.position.copy(_fwd)
   sun.position.copy(_fwd).addScaledVector(sunDir, half * 2 + 10)
 }
 
 // How big the next plant is: trees show their shade circle, plants their footprint.
 function scaleFor(type) {
-  return onTable() ? MINI : 1
+  return onTable() ? (KIND[type] === 'tree' ? MINI : DESK) : 1
 }
 let reticleKey = ''
 function sizeReticle() {
@@ -345,7 +349,7 @@ function updateReticle() {
   trackSurface()
   const r = state.world.renderer.domElement.getBoundingClientRect()
   const p = floorHitAt(r.left + r.width / 2, r.top + r.height * 0.55)
-  reticle.visible = !!p && !state.active && !state.shooting
+  reticle.visible = !!p && !state.active && !state.shooting && !(performance.now() < state.waveUntil)
   sizeReticle()
   if (p) {
     reticle.position.copy(p)
@@ -419,7 +423,7 @@ async function placeAt(point) {
   updateCount()
   if (mini && !state.miniHinted) {
     state.miniHinted = true
-    setHint('Table spotted: you get 1:12 models here. Point at the floor for real size.', false, 5000)
+    setHint('Table spotted: trees show as 1:12 models, plants at desk size. Point at the floor for real size.', false, 5000)
   } else if (state.placed.length === 1) setHint('Nice. Drag to move it. Tap it to rotate or remove.', false, 3500)
   else if (state.placed.length === 3) setHint('Looks good! Tap the camera to keep your green plan.', false, 4000)
   else hideHint()
@@ -601,8 +605,8 @@ async function takePhoto() {
 function stampBrand(ctx, canvas) {
   const s = canvas.width / 400
   const sum = summary()
-  const lines = sum.shadeText ? [sum.shadeText] : []
-  const h = (62 + lines.length * 21) * s
+  const big = sum.trees ? `${sum.shade} m² of shade · up to 25 °C cooler` : ''
+  const h = (big ? 92 : 62) * s
   const y = canvas.height - h
   ctx.save()
   const grad = ctx.createLinearGradient(0, y - 30 * s, 0, canvas.height)
@@ -620,9 +624,11 @@ function stampBrand(ctx, canvas) {
   ctx.fillText('The air-con made of leaves', 128 * s, y + 25 * s)
   ctx.font = `600 ${17 * s}px "Instrument Sans", system-ui, sans-serif`
   ctx.fillText(`My green plan: ${sum.title}`, 16 * s, y + 51 * s)
-  ctx.fillStyle = '#CFE9D8'
-  ctx.font = `500 ${13 * s}px "IBM Plex Mono", ui-monospace, monospace`
-  lines.forEach((t, i) => ctx.fillText(t, 16 * s, y + (73 + i * 21) * s))
+  if (big) {
+    ctx.fillStyle = '#9FE0FF'
+    ctx.font = `700 ${21 * s}px "Instrument Sans", system-ui, sans-serif`
+    ctx.fillText(big, 16 * s, y + 80 * s, canvas.width - 32 * s)
+  }
   ctx.restore()
 }
 
@@ -755,7 +761,7 @@ function startPreview() {
   resize()
   renderer.setAnimationLoop((t) => { controls.update(); tick(performance.now()); renderer.render(scene, camera) })
   $('ui').classList.remove('hidden')
-  window.__leafcon = {state, placeAt, THREE, controls, coolEffect}  // for automated tests
+  window.__leafcon = {state, placeAt, THREE, controls, coolEffect, loadPlant}  // for automated tests
 }
 
 buildTray()
