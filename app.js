@@ -127,7 +127,7 @@ function asphaltTexture() {
   return t
 }
 let blobTex, tileTex, coolTex
-const HOT = new THREE.Color(0xff6a2b), COOL = new THREE.Color(0x8fd3ff)
+const HOT = new THREE.Color(0xff6a2b), COOL = new THREE.Color(0x5fe3c8)
 const HOT_BG = new THREE.Color(0xc4542a), COOL_BG = new THREE.Color(0x17543c), _bg = new THREE.Color()
 function flatDisc(radius, material, y) {
   const m = new THREE.Mesh(new THREE.CircleGeometry(radius, 48), material)
@@ -257,7 +257,7 @@ function labelSprite() {
     g.beginPath(); g.roundRect(4, 4, 504, 104, 52); g.fill()
     g.fillStyle = '#ffffff'; g.font = '700 42px "Instrument Sans", system-ui, sans-serif'
     g.textAlign = 'center'; g.textBaseline = 'middle'
-    g.fillText(text, 256, 58)
+    g.fillText(text, 256, 58, 440)
     t.needsUpdate = true
   }
   t.colorSpace = THREE.SRGBColorSpace
@@ -273,12 +273,19 @@ function coolEffect(root, crownR, height, delay) {
   const MS = 3400
   state.waveUntil = t0 + MS * 0.6
   // The patch under the crown first glows hot (sunny asphalt), then turns cool and stays.
-  const patch = noRaycast(flatDisc(crownR, new THREE.MeshBasicMaterial({map: coolTex, color: HOT, transparent: true, opacity: 0, depthWrite: false}), 0.003))
+  const patch = noRaycast(flatDisc(crownR * 1.15, new THREE.MeshBasicMaterial({map: coolTex, color: HOT, transparent: true, opacity: 0, depthWrite: false}), 0.003))
+  const d = state.sunDir
+  if (d && d.y > 0.1) {
+    const off = new THREE.Vector3(-d.x, 0, -d.z).multiplyScalar(height * 0.3 / d.y)
+    if (off.length() > crownR * 0.8) off.setLength(crownR * 0.8)
+    off.applyAxisAngle(new THREE.Vector3(0, 1, 0), -root.rotation.y)
+    patch.position.x = off.x; patch.position.z = off.z
+  }
   root.add(patch)
   patch.scale.setScalar(0.01)
   const label = labelSprite()
   label.material.opacity = 0
-  label.position.copy(root.position).y += height * 1.05
+  label.position.copy(root.position).y += height * 1.15
   scene.add(label)
   const y0 = label.position.y
   const ramp = (a, b, t) => Math.min(1, Math.max(0, (t - a) / (b - a)))
@@ -287,11 +294,11 @@ function coolEffect(root, crownR, height, delay) {
     const k = cool * cool * (3 - 2 * cool)  // smooth step
     patch.scale.setScalar(Math.max(0.01, grow) / Math.max(0.01, root.scale.x))
     patch.material.color.copy(HOT).lerpHSL(COOL, k)  // via the hue wheel: orange, green, blue
-    patch.material.opacity = grow * (0.8 - 0.25 * k)
-    // Label: 60 °C in the sun, counts down to 35 °C in the shade, then the claim.
-    const temp = Math.round(60 - 25 * k)
+    patch.material.opacity = grow * (0.85 - 0.2 * k)
+    // Label: 70 °C asphalt in the sun (start screen), counts down to 45 °C in the shade, then the claim.
+    const temp = Math.round(70 - 25 * k)
     const bg = '#' + _bg.copy(HOT_BG).lerpHSL(COOL_BG, k).getHexString()
-    label.userData.draw(t < 0.66 ? `Ground: ${temp} °C` : 'Shade: up to 25 °C cooler', bg)
+    label.userData.draw(t < 0.66 ? `Ground: ${temp} °C` : 'Up to 25 °C cooler', bg)
     label.material.opacity = t <= 0 ? 0 : Math.min(1, t * 10, (1 - t) * 5)
     label.position.y = y0 + height * 0.08 * t
     label.visible = !state.shooting
@@ -620,7 +627,7 @@ function stampBrand(ctx, canvas) {
   const s = canvas.width / 400
   const sum = summary()
   const big = sum.trees ? 'Up to 25 °C cooler ground' : ''
-  const h = (big ? 104 : 66) * s
+  const h = (big ? 112 : 74) * s
   const y = canvas.height - h
   ctx.save()
   const grad = ctx.createLinearGradient(0, y - 30 * s, 0, canvas.height)
@@ -631,12 +638,12 @@ function stampBrand(ctx, canvas) {
   ctx.fillRect(0, y - 30 * s, canvas.width, h + 30 * s)
   ctx.textBaseline = 'alphabetic'
   ctx.fillStyle = '#9FD8B2'
-  ctx.font = `700 ${32 * s}px "Bricolage Grotesque", system-ui, sans-serif`
-  ctx.fillText('LeafCon', 16 * s, y + 30 * s)
+  ctx.font = `700 ${42 * s}px "Bricolage Grotesque", system-ui, sans-serif`
+  ctx.fillText('LeafCon', 16 * s, y + 38 * s)
   ctx.fillStyle = '#FFFFFF'
   ctx.font = `500 ${15 * s}px "Instrument Sans", system-ui, sans-serif`
-  ctx.fillText('The air-con made of leaves', 152 * s, y + 28 * s, canvas.width - 168 * s)
-  let ly = y + 56 * s
+  ctx.fillText('The air-con made of leaves', 196 * s, y + 34 * s, canvas.width - 212 * s)
+  let ly = y + 66 * s
   if (big) {
     ctx.fillStyle = '#9FE0FF'
     ctx.font = `700 ${27 * s}px "Instrument Sans", system-ui, sans-serif`
